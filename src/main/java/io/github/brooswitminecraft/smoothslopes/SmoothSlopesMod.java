@@ -1,16 +1,25 @@
 package io.github.brooswitminecraft.smoothslopes;
 
+import java.io.IOException;
+import java.nio.file.Path;
+
 import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
 import net.minecraft.core.registries.Registries;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
+import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ConfigTracker;
 import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.loading.FMLPaths;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
@@ -22,6 +31,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public class SmoothSlopesMod {
     public static final String MODID = "smoothslopes";
     public static final Logger LOGGER = LogUtils.getLogger();
+    private static final LevelResource SERVER_CONFIG_DIR = new LevelResource("serverconfig");
 
     public static final DeferredRegister<Feature<?>> FEATURES = DeferredRegister.create(Registries.FEATURE, MODID);
 
@@ -31,6 +41,30 @@ public class SmoothSlopesMod {
     public SmoothSlopesMod(IEventBus modEventBus, ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.SERVER, SmoothSlopesConfig.SPEC);
         FEATURES.register(modEventBus);
+        NeoForge.EVENT_BUS.addListener(SmoothSlopesMod::onServerAboutToStart);
         LOGGER.info("Smooth Slopes loaded");
+    }
+
+    /**
+     * NeoForge itself resolves this world's {@code serverconfig} override directory and reloads
+     * SERVER configs against it right before firing this same event (see
+     * {@code ServerLifecycleHooks.handleServerAboutToStart}) -- this is the earliest point this
+     * world's own override directory is known at all, so it is also the earliest point a
+     * per-world legacy migration ({@link PerWorldConfigMigration}) can run. If a migration writes
+     * a new override here, SERVER configs must be reloaded again so this session actually picks
+     * it up, the same call NeoForge itself just made.
+     */
+    private static void onServerAboutToStart(ServerAboutToStartEvent event) {
+        MinecraftServer server = event.getServer();
+        Path worldConfigDir = server.getWorldPath(SERVER_CONFIG_DIR);
+        Path legacyFile = worldConfigDir.resolve("dynamicterrain-server.toml");
+        Path ownFile = worldConfigDir.resolve("smoothslopes-server.toml");
+        try {
+            if (PerWorldConfigMigration.migrate(legacyFile, ownFile)) {
+                ConfigTracker.INSTANCE.loadConfigs(ModConfig.Type.SERVER, FMLPaths.CONFIGDIR.get(), worldConfigDir);
+            }
+        } catch (IOException e) {
+            LOGGER.warn("Could not migrate per-world worldgenSmoothing override to {}: {}", ownFile, e.toString());
+        }
     }
 }

@@ -35,27 +35,52 @@ from Dynamic Terrain's own pre-split file if that file is still present:
 an explicit `worldgenSmoothing = false` there carries forward as `false`
 here (see `MigrationPolicy`/`LegacyConfigMigration`); anything else
 defaults to the pre-split default of `true`. The legacy file itself is
-only read, never rewritten or deleted.
+only read, never rewritten or deleted. **Existing-config precedence:** this
+default is only ever consulted by NeoForge the first time it creates
+`smoothslopes-server.toml` — an already-existing file's real value always
+wins, migrated or not, which is NeoForge's own config-loading behavior,
+not something this mod re-implements.
 
-**Registry identifiers — why this is safe to rename:** `smooth_surface`
+**Per-world override migration (MINECRAFT-500 review, 52752):** NeoForge
+also lets an operator override the global SERVER config for just one
+world, via `<world save>/serverconfig/<modid>-server.toml` (resolved only
+once that world is actually starting — see
+`ServerLifecycleHooks.handleServerAboutToStart` in NeoForge itself). A
+world could have had `worldgenSmoothing` disabled only for itself this
+way, independent of the global default. `PerWorldConfigMigration`, run
+from `SmoothSlopesMod`'s own `ServerAboutToStartEvent` listener (the
+earliest point this world's override directory is known), migrates that
+per-world legacy file into this mod's own per-world override exactly
+like the global case: skipped entirely if this mod already has its own
+per-world override for that world (operator-authored or migrated on a
+previous start always wins), and never overwritten afterwards.
+
+**Registry identifiers — why renaming this one is safe:** `smooth_surface`
 moves from the `dynamicterrain` namespace to `smoothslopes`
 (`neoforge:add_features`/`worldgen/configured_feature`/`worldgen/placed_feature`).
 Unlike the layered *blocks* themselves (which Layered Slopes deliberately
 kept under the legacy `dynamicterrain` namespace because block ids are
-saved per-chunk), a worldgen *feature* id is never persisted in a save —
-it only exists while a chunk is actively being generated — so renaming it
-carries no save-compatibility risk. Blocks this feature already placed in
-existing chunks keep resolving exactly as before, through Layered Slopes'
-preserved `dynamicterrain:layered_*` ids.
+saved per-chunk), a worldgen *feature* id is not written into chunk data —
+it is only resolved while a chunk is actively generating — so an existing
+save's already-placed blocks keep resolving exactly as before, through
+Layered Slopes' preserved `dynamicterrain:layered_*` ids, regardless of
+this rename. This does **not** cover a third-party datapack or world
+preset that references `dynamicterrain:smooth_surface` directly by id
+(e.g. a custom biome's own feature list, or another pack's world-preset
+JSON) — such a reference would need updating to `smoothslopes:smooth_surface`
+by whoever maintains it, same as any upstream id rename; this mod has no
+way to discover or migrate an arbitrary third party's own datapack.
 
 ## Test coverage — what's covered, what isn't
 
 Headless (no game bootstrap): `SmoothColumnRulesTest`/`SurfaceSmootherTest`/
 `StructureBoundsTest`/`StructureProtectionTest` cover the pure worldgen
 decisions ported unchanged from Dynamic Terrain. `MigrationPolicyTest`/
-`LegacyConfigMigrationTest` cover the config-migration decision and its
-file-reading glue, including a missing, key-less, or unreadable legacy
-file.
+`LegacyConfigMigrationTest` cover the global config-migration decision and
+its file-reading glue, including a missing, key-less, or unreadable legacy
+file. `PerWorldConfigMigrationTest` covers the per-world override
+migration the same way, including that an existing per-world override of
+this mod's own is never overwritten.
 
 Real runtime evidence: `CoinstalledGameTests` (`ci.yml`'s "Run GameTests"
 step, `./gradlew runGameTestServer` against a real NeoForge server with
