@@ -1,4 +1,6 @@
-package io.github.brooswitminecraft.smoothslopes;
+package io.github.brooswitminecraft.smoothslopes.ftffixture;
+
+import io.github.brooswitminecraft.smoothslopes.SmoothSlopesMod;
 
 import etcodehome.freeterraforged.data.worldgen.preset.settings.Presets;
 import etcodehome.freeterraforged.platform.DataGenUtil;
@@ -36,7 +38,12 @@ import net.neoforged.neoforge.data.event.GatherDataEvent;
  * {@code META-INF/neoforge.mods.toml}), and only the dedicated {@code ftfPresetData} run's
  * {@code loadedMods} includes it; every other run (client/server/gameTestServer/the ordinary
  * {@code data} run) is restricted to just {@code smoothslopes} and never sees this class or
- * FreeTerraForged at all.
+ * FreeTerraForged at all. This class lives in its own {@code .ftffixture} sub-package rather than
+ * {@code io.github.brooswitminecraft.smoothslopes} itself -- confirmed live that NeoForge's
+ * modular classloading (JPMS) refuses to boot at all ({@code ResolutionException: Modules
+ * smoothslopes and smoothslopesftffixture export package ... to module mixin_synthetic}) if two
+ * different mods' modules both export the exact same package, a "split package" the module system
+ * forbids regardless of which actual classes end up in which jar.
  *
  * <p>{@link #gatherData} gates on the {@code smoothslopes.ftfPresetFixture} system property (set
  * only by {@code build.gradle}'s dedicated {@code ftfPresetData} run), not on {@code --mod}:
