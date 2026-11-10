@@ -53,3 +53,37 @@ jobs:
     with:
       gated-paths: '["^src/"]'
       version-file: 'gradle.properties'
+
+  # MINECRAFT-500 / Jira review 52702/52703/52752: the coinstalled GameTest above proves this mod
+  # boots with Layered Slopes, but not that it actually smooths generated terrain under
+  # FreeTerraForged's own noise settings. This generates FreeTerraForged's real default preset as
+  # an applied datapack (FreeTerraForgedPresetFixture, headless, no GUI), then boots a real
+  # dedicated server twice (worldgenSmoothing on/off, same seed, same datapack) and checks over
+  # RCON for a layered block -- the one thing that can only exist if smoothing actually ran.
+  freeterraforged-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Generate FreeTerraForged's default preset as an applied datapack
+        run: ./gradlew runFtfPresetData --no-daemon
+
+      - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
+        run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
+
+      - name: Preserve FreeTerraForged acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeterraforged-acceptance
+          path: |
+            ftf-acceptance-*.log
+            ftf-acceptance-result.json
+          if-no-files-found: warn
