@@ -182,12 +182,19 @@ def main():
                             f"be genuinely tested")
     (legacy_dir / 'dynamicterrain-server.toml').write_text("worldgenSmoothing = false\n")
 
+    # LIBGL_ALWAYS_SOFTWARE forces Mesa's llvmpipe software rasterizer: confirmed live that
+    # without it, GLFW/LWJGL hangs indefinitely trying to create a GL context against Xvfb's own
+    # (headless, no real GPU) GLX implementation -- the client log goes completely silent right
+    # after the initial resource/texture-atlas load, forever, with no crash and no further
+    # progress at all, never reaching quickplay's own joinSingleplayerWorld logic.
+    client_env = dict(os.environ)
+    client_env['LIBGL_ALWAYS_SOFTWARE'] = '1'
     log_path = Path.cwd() / 'paired-client-acceptance.log'
     log = open(log_path, 'w')
     process = subprocess.Popen(
         ['xvfb-run', '-a', './gradlew', 'runClient', '--no-daemon',
          '-Dorg.gradle.jvmargs=-Xmx2G', f'-PdtJarPath={dt_jar_path}', f'-PquickPlay={SAVE_NAME}'],
-        cwd=repo_dir, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        cwd=repo_dir, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=client_env)
 
     deadline = time.monotonic() + 420
     reached_world = False
