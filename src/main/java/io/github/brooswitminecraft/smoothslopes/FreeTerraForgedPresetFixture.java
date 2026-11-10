@@ -55,10 +55,45 @@ final class FreeTerraForgedPresetFixture {
         }
         SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers");
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);
-        CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider()
-                .thenApply(vanilla -> Presets.makeFTFDefault().buildPatch(vanilla));
-        event.getGenerator().addProvider(true, DataGenUtil.createRegistryProvider(output, patch));
-        event.getGenerator().addProvider(true, new PackMcmetaProvider(output));
+        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: PackOutput folder={}",
+                output.getOutputFolder());
+        CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider().thenApply(vanilla -> {
+            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: building FTF default preset patch");
+            try {
+                HolderLookup.Provider result = Presets.makeFTFDefault().buildPatch(vanilla);
+                SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: patch built successfully");
+                return result;
+            } catch (RuntimeException e) {
+                SmoothSlopesMod.LOGGER.error("FreeTerraForgedPresetFixture: buildPatch threw", e);
+                throw e;
+            }
+        });
+        DataProvider registryProvider = DataGenUtil.createRegistryProvider(output, patch);
+        event.getGenerator().addProvider(true, new LoggingProvider(registryProvider));
+        event.getGenerator().addProvider(true, new LoggingProvider(new PackMcmetaProvider(output)));
+    }
+
+    /** Temporary diagnostic (MINECRAFT-500): confirms run() is actually invoked, and how it ends. */
+    private record LoggingProvider(DataProvider delegate) implements DataProvider {
+        @Override
+        public CompletableFuture<?> run(CachedOutput cachedOutput) {
+            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: running provider {}", delegate.getName());
+            CompletableFuture<?> future = delegate.run(cachedOutput);
+            return future.whenComplete((result, error) -> {
+                if (error != null) {
+                    SmoothSlopesMod.LOGGER.error("FreeTerraForgedPresetFixture: provider {} failed",
+                            delegate.getName(), error);
+                } else {
+                    SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: provider {} completed",
+                            delegate.getName());
+                }
+            });
+        }
+
+        @Override
+        public String getName() {
+            return delegate.getName();
+        }
     }
 
     /**

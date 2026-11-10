@@ -76,7 +76,9 @@ jobs:
         run: ./gradlew runFtfPresetData --no-daemon
 
       - name: Diagnostic -- show what the datagen step actually produced
-        run: find build/ftf-preset-data -type f 2>&1 || echo "build/ftf-preset-data does not exist"
+        run: |
+          find build -maxdepth 5 2>&1
+          find . -maxdepth 1 -newer gradle.properties 2>&1 || true
 
       - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
         run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
