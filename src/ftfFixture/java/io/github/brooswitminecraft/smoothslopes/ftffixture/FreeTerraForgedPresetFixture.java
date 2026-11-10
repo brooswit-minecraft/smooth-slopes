@@ -1,22 +1,22 @@
 package io.github.brooswitminecraft.smoothslopes.ftffixture;
 
-import io.github.brooswitminecraft.smoothslopes.SmoothSlopesMod;
-
 import etcodehome.freeterraforged.data.worldgen.preset.settings.Presets;
 import etcodehome.freeterraforged.platform.DataGenUtil;
 
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
+import org.slf4j.Logger;
+
 import com.google.gson.JsonParser;
+import com.mojang.logging.LogUtils;
 
 import net.minecraft.SharedConstants;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.data.CachedOutput;
 import net.minecraft.data.DataProvider;
 import net.minecraft.data.PackOutput;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.data.event.GatherDataEvent;
 
 /**
@@ -29,54 +29,56 @@ import net.neoforged.neoforge.data.event.GatherDataEvent;
  *
  * <p><b>Isolation from the shipped jar (Wroosbit review 52775):</b> this class, its
  * {@code PackMcmetaProvider}, and the FreeTerraForged dependency it compiles against all live in
- * the separate {@code ftfFixture} sourceSet (see {@code build.gradle}), never {@code main} --
- * reviewed evidence found this class and FreeTerraForged itself in the actual shipped
- * {@code smoothslopes-*.jar} and on every other run's classpath (including the coinstalled
- * GameTest, which was meant to prove Layered-Slopes-only coinstallation) when this lived in
- * {@code main} with FreeTerraForged as a global dev dependency. {@code ftfFixture} is registered
- * as its own NeoForge mod ({@code smoothslopesftffixture}, see its own
- * {@code META-INF/neoforge.mods.toml}), and only the dedicated {@code ftfPresetData} run's
- * {@code loadedMods} includes it; every other run (client/server/gameTestServer/the ordinary
- * {@code data} run) is restricted to just {@code smoothslopes} and never sees this class or
- * FreeTerraForged at all. This class lives in its own {@code .ftffixture} sub-package rather than
- * {@code io.github.brooswitminecraft.smoothslopes} itself -- confirmed live that NeoForge's
- * modular classloading (JPMS) refuses to boot at all ({@code ResolutionException: Modules
- * smoothslopes and smoothslopesftffixture export package ... to module mixin_synthetic}) if two
- * different mods' modules both export the exact same package, a "split package" the module system
- * forbids regardless of which actual classes end up in which jar.
+ * the separate {@code ftfFixture} sourceSet (see {@code build.gradle}), never {@code main}.
  *
- * <p>{@link #gatherData} gates on the {@code smoothslopes.ftfPresetFixture} system property (set
- * only by {@code build.gradle}'s dedicated {@code ftfPresetData} run), not on {@code --mod}:
- * confirmed live against a real CI run that NeoForge's {@code DatagenModLoader} only adds a
- * container's {@code DataGenerator} to the set it actually runs when {@code --mod} contains that
- * container's REAL mod id ({@code dataGeneratorConfig.getMods().contains(container.getModId())}
- * gates {@code DataGeneratorConfig.makeGenerator}'s second, "will run" argument) -- a synthetic
- * {@code --mod} value here left every provider registered but never executed, with a clean
- * {@code BUILD SUCCESSFUL} and no error at all. {@code --mod} must stay this mod's real id so the
- * generator is actually in the run set; the system property is what tells this run apart from the
- * ordinary {@code data} run instead.
+ * <p><b>Why no {@code @EventBusSubscriber}/own mod file (three prior attempts, each confirmed
+ * live against real CI runs):</b>
+ * <ol>
+ * <li>A sourceSet's own {@code runtimeOnly} dependency does not ride along with that sourceSet's
+ * own {@code ModModel} at run time -- FreeTerraForged's jar was absent from the run's classpath
+ * even though the fixture's own mod file loaded.</li>
+ * <li>{@code RunModel.additionalRuntimeClasspathConfiguration} did not fix that either --
+ * {@code "All providers took: 0 ms, total files: 0"}, zero providers ever ran.</li>
+ * <li>Making {@code ftfFixture} the run's primary {@code sourceSet} got the mod file "found" and
+ * even "Attempting to inject @EventBusSubscriber classes" logged for it, but the annotation scan
+ * itself found nothing -- no "Scanning class FreeTerraForgedPresetFixture" line ever appeared, and
+ * {@link #gatherData} itself never logged anything, in any of these attempts.</li>
+ * </ol>
+ * Given three different failures all specifically in getting this class discovered/scanned as its
+ * own separate NeoForge mod, this class is no longer one: it has no {@code @EventBusSubscriber}
+ * and no {@code META-INF/neoforge.mods.toml} of its own. {@link SmoothSlopesMod} (in {@code main},
+ * where annotation scanning is unambiguously proven to work every single run) looks this class up
+ * by name via plain reflection and calls {@link #register} directly -- ordinary JVM classloading,
+ * not NeoForge's mod-file discovery, is the only thing this now depends on. {@code main} never
+ * references this class directly (no compile-time dependency either direction), so a normal
+ * build where this class is absent from the classpath entirely (every run except the dedicated
+ * {@code ftfPresetData} one) is unaffected; {@code SmoothSlopesMod}'s lookup simply catches
+ * {@code ClassNotFoundException} and does nothing.
  */
-@EventBusSubscriber(modid = SmoothSlopesMod.MODID, bus = EventBusSubscriber.Bus.MOD)
-final class FreeTerraForgedPresetFixture {
+public final class FreeTerraForgedPresetFixture {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final String PACK_NAME = "freeterraforged_default_preset";
     /** Must match build.gradle's {@code ftfPresetData} run's systemProperty key exactly. */
     private static final String FIXTURE_RUN_PROPERTY = "smoothslopes.ftfPresetFixture";
 
     private FreeTerraForgedPresetFixture() {}
 
-    @SubscribeEvent
+    /** Called reflectively by {@code SmoothSlopesMod} -- see this class's own doc for why. */
+    public static void register(IEventBus modEventBus) {
+        modEventBus.addListener(FreeTerraForgedPresetFixture::gatherData);
+    }
+
     static void gatherData(GatherDataEvent event) {
         // Diagnostic (MINECRAFT-500 / Jira 52778): kept permanently, not just while narrowing this
-        // down -- two prior CI attempts reported "BUILD SUCCESSFUL" with zero providers run and no
-        // exception, so this is the only way to tell "gate failed" apart from "gate passed but
-        // something downstream silently produced nothing" from the log alone.
-        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} systemProperty({})={}",
+        // down -- "BUILD SUCCESSFUL" with zero providers run and no exception has already happened
+        // three times, so the log itself must be able to show which branch gatherData took.
+        LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} systemProperty({})={}",
                 event.includeServer(), FIXTURE_RUN_PROPERTY, System.getProperty(FIXTURE_RUN_PROPERTY));
         if (!event.includeServer() || System.getProperty(FIXTURE_RUN_PROPERTY) == null) {
             return;
         }
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);
-        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers, output={}",
+        LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers, output={}",
                 output.getOutputFolder());
         CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider()
                 .thenApply(vanilla -> Presets.makeFTFDefault().buildPatch(vanilla));

@@ -38,11 +38,41 @@ public class SmoothSlopesMod {
     public static final DeferredHolder<Feature<?>, SmoothSurfaceFeature> SMOOTH_SURFACE =
             FEATURES.register("smooth_surface", () -> new SmoothSurfaceFeature(NoneFeatureConfiguration.CODEC));
 
+    /**
+     * Fully-qualified name of the MINECRAFT-500 FreeTerraForged acceptance fixture, looked up
+     * reflectively below -- never imported, so this class carries no compile-time dependency on
+     * it, and plain {@link ClassNotFoundException} (every build except the dedicated
+     * {@code ftfPresetData} run, which is the only one that puts it on the classpath at all) is
+     * indistinguishable from "this fixture doesn't exist for this run," not an error.
+     */
+    private static final String FTF_PRESET_FIXTURE_CLASS =
+            "io.github.brooswitminecraft.smoothslopes.ftffixture.FreeTerraForgedPresetFixture";
+
     public SmoothSlopesMod(IEventBus modEventBus, ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.SERVER, SmoothSlopesConfig.SPEC);
         FEATURES.register(modEventBus);
         NeoForge.EVENT_BUS.addListener(SmoothSlopesMod::onServerAboutToStart);
+        registerFreeTerraForgedFixtureIfPresent(modEventBus);
         LOGGER.info("Smooth Slopes loaded");
+    }
+
+    /**
+     * MINECRAFT-500 / Wroosbit review 52775: the FreeTerraForged acceptance fixture has no
+     * {@code @EventBusSubscriber} and no mod file of its own (see its own class doc for why three
+     * different attempts at that all failed) -- {@code main} looks it up by name and registers it
+     * directly instead, the one mechanism unambiguously proven to work every run.
+     */
+    private static void registerFreeTerraForgedFixtureIfPresent(IEventBus modEventBus) {
+        try {
+            Class<?> fixtureClass = Class.forName(FTF_PRESET_FIXTURE_CLASS);
+            fixtureClass.getMethod("register", IEventBus.class).invoke(null, modEventBus);
+            LOGGER.info("FreeTerraForged acceptance fixture found and registered");
+        } catch (ClassNotFoundException e) {
+            // Normal for every run except the dedicated ftfPresetData one.
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Found " + FTF_PRESET_FIXTURE_CLASS
+                    + " but could not register it", e);
+        }
     }
 
     /**

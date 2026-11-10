@@ -23,14 +23,12 @@ sourceSets.main.resources {
 
 // Wroosbit review 52775: the MINECRAFT-500 FreeTerraForged acceptance fixture (and the
 // FreeTerraForged dependency it compiles against) must never reach the shipped Smooth Slopes jar
-// or any other run's classpath. A separate sourceSet, compiling against main's output (to
-// reference SmoothSlopesMod.MODID) but never included IN main, is what makes that structurally
-// true rather than merely intended -- see the ftfPresetData run's restricted loadedMods below.
+// or any other run's classpath. A separate sourceSet -- not part of main's own output, and with
+// no compile-time dependency in either direction (see FreeTerraForgedPresetFixture's own class
+// doc for why it's looked up reflectively from main instead of being its own NeoForge mod) -- is
+// what makes that structurally true rather than merely intended.
 sourceSets {
-    ftfFixture {
-        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
-        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
-    }
+    ftfFixture { }
 }
 
 repositories {
@@ -65,11 +63,11 @@ tasks.register("downloadLayeredSlopes") {
 
 // FreeTerraForged: NOT a dependency of this mod (not in neoforge.mods.toml, never on main's
 // classpath at all) -- a dev/CI-only tool for the MINECRAFT-500 acceptance evidence in
-// tools/freeterraforged-acceptance/, which needs its real jar on the ftfFixture sourceSet's
-// classpath only (see the dependencies{} block below) to call its public Presets/DataGenUtil API
-// and generate its default preset's actual patch registries as a real datapack (see
-// FreeTerraForgedPresetFixture). Pinned by version and verified by sha512, same download-and-verify
-// pattern as layered-slopes above.
+// tools/freeterraforged-acceptance/, which needs its real jar only on the dedicated
+// ftfPresetData run's classpath (see the dependencies{} block below) to call its public
+// Presets/DataGenUtil API and generate its default preset's actual patch registries as a real
+// datapack (see FreeTerraForgedPresetFixture). Pinned by version and verified by sha512, same
+// download-and-verify pattern as layered-slopes above.
 // Captured as plain values at configuration time: the configuration cache forbids any
 // project.*/bare-property access inside doLast{} at execution time (confirmed live by this exact
 // failure: "Could not get unknown property 'minecraft_version'" when it was referenced directly
@@ -116,12 +114,6 @@ neoForge {
         "${mod_id}" {
             sourceSet(sourceSets.main)
         }
-        // MINECRAFT-500 / Wroosbit review 52775: its own mod file/sourceSet (never main), so the
-        // FreeTerraForged acceptance fixture and its FreeTerraForged dependency structurally
-        // cannot reach the shipped jar. See FreeTerraForgedPresetFixture's own class doc.
-        "${mod_id}ftffixture" {
-            sourceSet(sourceSets.ftfFixture)
-        }
     }
 
     runs {
@@ -157,11 +149,13 @@ neoForge {
         }
 
         // MINECRAFT-500 acceptance: a SEPARATE data run, output to build/ (never src/generated/
-        // resources, so this never ships in the mod jar). The fixture that acts on this run lives
-        // in its own mod/sourceSet (ftfFixture, see mods{} above) and is explicitly added to ONLY
-        // this run's loadedMods -- every other run above is restricted to just the real mod, and
-        // never sees FreeTerraForgedPresetFixture or FreeTerraForged on its classpath at all
-        // (Wroosbit review 52775).
+        // resources, so this never ships in the mod jar). loadedMods stays just the real mod --
+        // FreeTerraForgedPresetFixture is not a NeoForge mod of its own (see its own class doc:
+        // three different attempts at making it one each failed in a different way). Its compiled
+        // output and FreeTerraForged's own jar are added to ONLY this run's
+        // additionalRuntimeClasspathConfiguration below, purely so plain JVM classloading
+        // (SmoothSlopesMod's reflective Class.forName lookup) can find them -- not NeoForge's own
+        // mod-file discovery, which is exactly the mechanism that kept failing.
         //
         // --mod stays the REAL mod id, not a synthetic marker: confirmed live that
         // DatagenModLoader only adds a container's DataGenerator to the actually-run set when
@@ -173,13 +167,7 @@ neoForge {
             data()
             programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
             systemProperty 'smoothslopes.ftfPresetFixture', 'true'
-            loadedMods = [mods.getByName("${mod_id}"), mods.getByName("${mod_id}ftffixture")]
-            // Attempt: a run's own base classpath may default to main's resolved dependencies
-            // regardless of loadedMods (explaining why FreeTerraForged, on ftfFixture's own
-            // runtimeOnly/additionalRuntimeClasspathConfiguration, still never got discovered as a
-            // mod file in two prior attempts) -- try making ftfFixture this run's own primary
-            // sourceSet instead, so its own resolved runtime dependencies become the base.
-            sourceSet = sourceSets.ftfFixture
+            loadedMods = [mods.getByName("${mod_id}")]
         }
 
         // MINECRAFT-500 / Wroosbit review 52775 finding 2+3: boots Dynamic Terrain + Layered
@@ -206,25 +194,24 @@ dependencies {
     compileOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
     runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
 
-    // Dev/CI-tooling only (see downloadFreeTerraForged above), and ONLY on the ftfFixture
-    // sourceSet's own configurations -- never main's -- so it never reaches the shipped jar or any
-    // other run's classpath (Wroosbit review 52775). Never jarJar'd either way.
-    // compileOnly only: compiles FreeTerraForgedPresetFixture against FreeTerraForged's real
-    // classes. A sourceSet's own runtimeOnly dependency does NOT ride along with its ModModel at
-    // run time -- confirmed live: the "smoothslopesftffixture" mod file was found and loaded, but
-    // FreeTerraForged's own jar was absent from that same run's classpath entirely, with
-    // ftfFixtureRuntimeOnly declared. The actual runtime jar is added to the specific run's own
-    // additionalRuntimeClasspathConfiguration below instead, which is the mechanism that
-    // genuinely controls a run's classpath contents.
+    // Dev/CI-tooling only, and ONLY on the ftfFixture sourceSet's own compileOnly configuration --
+    // never main's -- so it never reaches the shipped jar (Wroosbit review 52775). Compiles
+    // FreeTerraForgedPresetFixture against FreeTerraForged's real classes; never jarJar'd.
     ftfFixtureCompileOnly files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged"))
 
     testImplementation platform("org.junit:junit-bom:5.11.4")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
-    // The actual mechanism that puts a jar on one specific run's classpath: each run's own
-    // additionalRuntimeClasspathConfiguration (see the comment on ftfFixtureCompileOnly above for
-    // why a sourceSet's own runtimeOnly dependency does not do this).
+    // Puts FreeTerraForgedPresetFixture's own compiled output and FreeTerraForged's jar on ONLY
+    // the ftfPresetData run's classpath, for plain JVM classloading (SmoothSlopesMod's reflective
+    // Class.forName lookup) to find -- not NeoForge's own mod-file discovery, which three
+    // different prior attempts (sourceSet runtimeOnly, this same additionalRuntimeClasspath
+    // mechanism used for mod discovery instead of plain classloading, and overriding the run's
+    // primary sourceSet) each failed to get working. See FreeTerraForgedPresetFixture's own class
+    // doc for the detailed history.
+    add(neoForge.runs.getByName("ftfPresetData").additionalRuntimeClasspathConfiguration.name,
+            sourceSets.ftfFixture.output)
     add(neoForge.runs.getByName("ftfPresetData").additionalRuntimeClasspathConfiguration.name,
             files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged")))
     // MINECRAFT-500 paired acceptance only: Dynamic Terrain's own independently-built jar, passed
