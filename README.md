@@ -94,14 +94,30 @@ below are confirmed to have actually run and passed):
   bound, registered `Feature`, and resolves to this mod's own
   `SmoothSurfaceFeature` class.
 
+Exact-release FreeTerraForged acceptance (`ci.yml`'s `freeterraforged-acceptance`
+job, `tools/freeterraforged-acceptance/ftf_acceptance.py`): FreeTerraForged
+1.0.0's own default preset (`Presets.makeFTFDefault()`) is generated as a
+real, applied datapack headlessly, via its own public API
+(`Preset.buildPatch` + `DataGenUtil.createRegistryProvider` —
+`FreeTerraForgedPresetFixture`, the exact mechanism
+`PresetConfigScreen.exportAsDatapack` uses client-side, with no GUI
+involved). A real dedicated server boots twice on that applied datapack,
+same seed, once with `worldgenSmoothing` enabled and once disabled, and a
+grid of columns around spawn is sampled over RCON. The disposable world's
+own log confirms FreeTerraForged's real noise pipeline generated it (its
+own shutdown report: `Total Chunks Generated: 242`), not vanilla's. The
+enabled run found 5 `dynamicterrain:layered_grass` columns; the disabled
+run, same seed and columns, found zero — e.g. `(16, -8)` is
+`layered_grass` at y=68 enabled, plain `grass_block` at y=67 disabled.
+That is a real, direct before/after result, not an inference from
+co-loading.
+
 **Still not covered, and not manually playtested in this PR:** actual
-chunk-generation output (`SmoothSurfaceFeature.place()` itself needs a
-real `WorldGenLevel` during chunk generation, which the GameTest framework
-does not provide — the pure decision it delegates to is covered above
-instead), and the exact FreeTerraForged-generated-preset acceptance
-(real generated datapack, disposable world, before/after surface
-evidence) requested on MINECRAFT-500 — tracked as a remaining gap on the
-ticket rather than claimed here.
+chunk-generation output beyond what the FreeTerraForged acceptance above
+already samples (`SmoothSurfaceFeature.place()` itself needs a real
+`WorldGenLevel` during chunk generation, which the GameTest framework does
+not provide — the pure decision it delegates to is covered by the unit
+tests above instead), and a genuine player-driven in-game playtest.
 
 ## Building
 
