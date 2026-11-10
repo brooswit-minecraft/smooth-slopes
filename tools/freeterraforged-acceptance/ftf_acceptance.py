@@ -29,15 +29,19 @@ SEED = 500500500
 # A grid of columns around spawn, wide enough that at least a few should land on open ground
 # rather than tree canopy (which this script's air-boundary probe cannot see through -- those
 # columns just read as inconclusive, not wrong, since the same grid is used for both runs). Kept
-# deliberately small: each column costs ~9 RCON round trips to binary-search its surface plus up
-# to 2 per (offset, material) pair checked below, and this runs twice (enabled/disabled).
-GRID_RANGE = range(-24, 25, 8)  # 7x7 = 49 columns
+# deliberately small: find_top_nonair below is a worst-case O(TOP_Y-BOTTOM_Y) linear scan (2 RCON
+# round trips per Y checked), run once per column, and this whole scan runs twice (enabled/disabled).
+GRID_RANGE = range(-16, 17, 8)  # 5x5 = 25 columns
 # The most common natural-surface materials with a registered layered form (dynamicterrain
 # namespace -- Layered Slopes' preserved pre-split registry name, per its own README). Kept to the
 # three most common temperate-biome surface blocks, not the full material list, to bound RCON cost.
 LAYERED_SURFACE_BLOCKS = ["layered_dirt", "layered_grass", "layered_stone"]
-TOP_Y = 192
-BOTTOM_Y = -63
+# Plain (unlayered) counterparts, purely diagnostic: if a column shows one of these but never its
+# layered_* form, that is real evidence terrain generated normally but smoothing never touched it
+# (config/biome-modifier gap), not evidence the sampling grid missed the surface.
+PLAIN_SURFACE_BLOCKS = ["dirt", "grass_block", "stone", "sand"]
+TOP_Y = 160
+BOTTOM_Y = 0
 SUCCESS_MARKER = "Changed the block at"  # see dynamic-terrain's own legacy_save_acceptance.py
 MARKER_POS = (0, 250, 0)
 
@@ -143,36 +147,49 @@ def stop_server(process, log, port):
     log.close()
 
 
-def find_top_nonair(port, x, z):
-    """Binary-search the topmost non-air Y in a column. Trees/leaves are not air either, so a
-    wooded column reads as the top of its canopy, not the ground -- an inconclusive column, not a
-    wrong one, since the same grid is used for both the enabled and disabled run."""
-    lo, hi = BOTTOM_Y, TOP_Y
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        response = rcon('127.0.0.1', port, RCON_PASSWORD,
-                         f"execute if block {x} {mid} {z} minecraft:air")[0]
-        is_air = response.strip() == ""
-        if is_air:
-            hi = mid - 1
-        else:
-            lo = mid
-    return lo
-
-
-def column_has_layered_block(port, x, z):
-    top = find_top_nonair(port, x, z)
+def block_matches(port, x, y, z, block_id):
+    """True if the block at (x,y,z) matches block_id, via the same fail-closed marker-flip oracle
+    dynamic-terrain's own legacy_save_acceptance.py uses: `execute if ... run <command>` is the
+    only vanilla command form that unambiguously signals a match over RCON (a bare `execute if
+    block ...` with no `run` clause is incomplete syntax, not a boolean query, and would have
+    returned a parse error on every call -- confirmed live, not assumed, after the first real
+    attempt here used exactly that bare form and silently got a constant result)."""
     mx, my, mz = MARKER_POS
+    rcon('127.0.0.1', port, RCON_PASSWORD, f"setblock {mx} {my} {mz} minecraft:air")
+    response = rcon('127.0.0.1', port, RCON_PASSWORD,
+                     f"execute if block {x} {y} {z} {block_id} "
+                     f"run setblock {mx} {my} {mz} minecraft:emerald_block")[0]
+    return SUCCESS_MARKER in response
+
+
+def find_top_nonair(port, x, z):
+    """Linear scan from TOP_Y down to the first non-air block. NOT a binary search: FreeTerraForged
+    generates overhangs/caves, so a column's air/solid pattern is not monotonic in Y, which a
+    binary search silently assumes. Trees/leaves are not air either, so a wooded column reads as
+    the top of its canopy, not the ground -- an inconclusive column, not a wrong one, since the
+    same grid is used for both the enabled and disabled run."""
+    for y in range(TOP_Y, BOTTOM_Y - 1, -1):
+        if not block_matches(port, x, y, z, "minecraft:air"):
+            return y
+    return None
+
+
+def column_surface(port, x, z):
+    """@return (top_y, layered_name_or_None, plain_name_or_None) for diagnostic purposes."""
+    top = find_top_nonair(port, x, z)
+    if top is None:
+        return None, None, None
     for dy in (0, -1, 1):  # smoothing can report the surface one cell either side of the raw top
         y = top + dy
         for name in LAYERED_SURFACE_BLOCKS:
-            rcon('127.0.0.1', port, RCON_PASSWORD, f"setblock {mx} {my} {mz} minecraft:air")
-            response = rcon('127.0.0.1', port, RCON_PASSWORD,
-                             f"execute if block {x} {y} {z} dynamicterrain:{name} "
-                             f"run setblock {mx} {my} {mz} minecraft:emerald_block")[0]
-            if SUCCESS_MARKER in response:
-                return True, name, (x, y, z)
-    return False, None, None
+            if block_matches(port, x, y, z, f"dynamicterrain:{name}"):
+                return y, name, None
+    for dy in (0, -1, 1):
+        y = top + dy
+        for name in PLAIN_SURFACE_BLOCKS:
+            if block_matches(port, x, y, z, f"minecraft:{name}"):
+                return y, None, name
+    return top, None, None
 
 
 def scan(port):
@@ -183,14 +200,18 @@ def scan(port):
     # forceloaded 7x7-chunk area real time to actually finish generating before sampling it.
     time.sleep(30)
     hits = []
+    plain_only = []
     for x in GRID_RANGE:
         for z in GRID_RANGE:
-            found, name, pos = column_has_layered_block(port, x, z)
-            if found:
-                hits.append({"pos": list(pos), "block": f"dynamicterrain:{name}"})
+            y, layered_name, plain_name = column_surface(port, x, z)
+            print(f"column ({x},{z}): top_y={y} layered={layered_name} plain={plain_name}", flush=True)
+            if layered_name:
+                hits.append({"pos": [x, y, z], "block": f"dynamicterrain:{layered_name}"})
+            elif plain_name:
+                plain_only.append({"pos": [x, y, z], "block": f"minecraft:{plain_name}"})
     rcon('127.0.0.1', port, RCON_PASSWORD,
          f"forceload remove {forceload_min_x} {forceload_min_x} {forceload_max_x} {forceload_max_x}")
-    return hits
+    return hits, plain_only
 
 
 def main():
@@ -213,13 +234,16 @@ def main():
         finally:
             stop_server(process, log, rcon_port)
 
-    enabled_hits = results["enabled"]
-    disabled_hits = results["disabled"]
+    enabled_hits, enabled_plain = results["enabled"]
+    disabled_hits, disabled_plain = results["disabled"]
     if not enabled_hits:
         raise RuntimeError(
             "worldgenSmoothing=true produced no layered block anywhere in the sampled grid -- "
             "either smoothing did not run under the FreeTerraForged preset, or the sampled grid "
-            "missed every eligible column (widen GRID_RANGE or check the preset's terrain band)")
+            "missed every eligible column (widen GRID_RANGE or check the preset's terrain band). "
+            f"{len(enabled_plain)} column(s) found a plain (unlayered) surface instead "
+            f"(sample: {enabled_plain[:5]}) -- terrain generated normally, so if that count is "
+            "nonzero the gap is smoothing not applying, not sampling missing the ground.")
     if disabled_hits:
         raise RuntimeError(
             f"worldgenSmoothing=false still produced {len(disabled_hits)} layered block(s) -- "
