@@ -63,12 +63,23 @@ public class SmoothSlopesMod {
      * directly instead, the one mechanism unambiguously proven to work every run.
      */
     private static void registerFreeTerraForgedFixtureIfPresent(IEventBus modEventBus) {
+        // Diagnostic (MINECRAFT-500 / Jira 52778/52780): kept permanently -- gating on a system
+        // property this run alone sets means this block is normally silent, and a silent
+        // ClassNotFoundException here would be indistinguishable from "additionalRuntimeClasspath
+        // never reached the actual launched JVM at all" without logging the real classpath.
+        if (System.getProperty("smoothslopes.ftfPresetFixture") != null) {
+            LOGGER.info("SmoothSlopesMod: ftfPresetFixture run detected, java.class.path={}",
+                    System.getProperty("java.class.path"));
+        }
         try {
             Class<?> fixtureClass = Class.forName(FTF_PRESET_FIXTURE_CLASS);
             fixtureClass.getMethod("register", IEventBus.class).invoke(null, modEventBus);
             LOGGER.info("FreeTerraForged acceptance fixture found and registered");
         } catch (ClassNotFoundException e) {
-            // Normal for every run except the dedicated ftfPresetData one.
+            if (System.getProperty("smoothslopes.ftfPresetFixture") != null) {
+                LOGGER.warn("SmoothSlopesMod: expected {} on classpath for this run but it was not found: {}",
+                        FTF_PRESET_FIXTURE_CLASS, e.toString());
+            }
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Found " + FTF_PRESET_FIXTURE_CLASS
                     + " but could not register it", e);
