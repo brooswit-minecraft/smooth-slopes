@@ -182,11 +182,15 @@ def main():
                             f"be genuinely tested")
     (legacy_dir / 'dynamicterrain-server.toml').write_text("worldgenSmoothing = false\n")
 
-    # LIBGL_ALWAYS_SOFTWARE forces Mesa's llvmpipe software rasterizer: confirmed live that
-    # without it, GLFW/LWJGL hangs indefinitely trying to create a GL context against Xvfb's own
-    # (headless, no real GPU) GLX implementation -- the client log goes completely silent right
-    # after the initial resource/texture-atlas load, forever, with no crash and no further
-    # progress at all, never reaching quickplay's own joinSingleplayerWorld logic.
+    # LIBGL_ALWAYS_SOFTWARE forces Mesa's llvmpipe software rasterizer -- needed for any GL
+    # context at all against Xvfb's own (headless, no real GPU) GLX implementation, but confirmed
+    # live NOT sufficient by itself: the client log still went completely silent at the exact same
+    # point (right after the initial resource/texture-atlas load), forever, with that env var
+    # already set. options.txt's own enableVsync defaults to true on a fresh game directory, and
+    # GLFW's buffer swap blocks waiting for a vblank signal Xvfb never delivers -- pre-seeding
+    # enableVsync:false (options.txt lives directly in the game directory, not per-save, so this
+    # must exist before the client process starts) avoids that wait entirely.
+    (game_dir / 'options.txt').write_text("enableVsync:false\nfullscreen:false\n")
     client_env = dict(os.environ)
     client_env['LIBGL_ALWAYS_SOFTWARE'] = '1'
     log_path = Path.cwd() / 'paired-client-acceptance.log'
