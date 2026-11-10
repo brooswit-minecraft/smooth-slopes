@@ -75,6 +75,9 @@ jobs:
       - name: Generate FreeTerraForged's default preset as an applied datapack
         run: ./gradlew runFtfPresetData --no-daemon
 
+      - name: Diagnostic -- show what the datagen step actually produced
+        run: find build/ftf-preset-data -type f 2>&1 || echo "build/ftf-preset-data does not exist"
+
       - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
         run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
 

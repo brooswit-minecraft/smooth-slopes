@@ -45,9 +45,15 @@ final class FreeTerraForgedPresetFixture {
 
     @SubscribeEvent
     static void gatherData(GatherDataEvent event) {
+        // Temporary diagnostic (MINECRAFT-500): the first real CI run produced zero output with
+        // no error, so log the exact gate inputs instead of guessing further from bytecode.
+        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} mods={}",
+                event.includeServer(), event.getMods());
         if (!event.includeServer() || !event.getMods().contains(FIXTURE_RUN_MARKER)) {
+            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: gate failed, skipping");
             return;
         }
+        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers");
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);
         CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider()
                 .thenApply(vanilla -> Presets.makeFTFDefault().buildPatch(vanilla));
