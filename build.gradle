@@ -57,7 +57,13 @@ tasks.register("downloadLayeredSlopes") {
 // classpath to call its public Presets/DataGenUtil API and generate its default preset's actual
 // patch registries as a real datapack (see FreeTerraForgedPresetFixture). Pinned by version and
 // verified by sha512, same download-and-verify pattern as layered-slopes above.
-def freeTerraForgedJar = layout.buildDirectory.file("freeterraforged/freeterraforged-${project.freeterraforged_version}-neoforge-${minecraft_version}.jar")
+// Captured as plain values at configuration time: the configuration cache forbids any
+// project.*/bare-property access inside doLast{} at execution time (confirmed live by this exact
+// failure: "Could not get unknown property 'minecraft_version'" when it was referenced directly
+// inside doLast{} below -- the same class of bug dynamic-terrain's own downloadLayeredSlopes hit
+// and fixed for the same reason).
+def freeTerraForgedMinecraftVersion = project.minecraft_version
+def freeTerraForgedJar = layout.buildDirectory.file("freeterraforged/freeterraforged-${project.freeterraforged_version}-neoforge-${freeTerraForgedMinecraftVersion}.jar")
 def freeTerraForgedVersion = project.freeterraforged_version
 def freeTerraForgedSha512 = project.freeterraforged_sha512
 tasks.register("downloadFreeTerraForged") {
@@ -65,7 +71,7 @@ tasks.register("downloadFreeTerraForged") {
     doLast {
         def target = freeTerraForgedJar.get().asFile
         target.parentFile.mkdirs()
-        def url = "https://cdn.modrinth.com/data/4ZFPRF02/versions/gU4J7GiI/freeterraforged-${freeTerraForgedVersion}-neoforge-${minecraft_version}.jar"
+        def url = "https://cdn.modrinth.com/data/4ZFPRF02/versions/gU4J7GiI/freeterraforged-${freeTerraForgedVersion}-neoforge-${freeTerraForgedMinecraftVersion}.jar"
         new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
         def digest = java.security.MessageDigest.getInstance("SHA-512")
         def actual = digest.digest(target.bytes).encodeHex().toString()
