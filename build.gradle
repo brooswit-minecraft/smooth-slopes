@@ -174,6 +174,12 @@ neoForge {
             programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
             systemProperty 'smoothslopes.ftfPresetFixture', 'true'
             loadedMods = [mods.getByName("${mod_id}"), mods.getByName("${mod_id}ftffixture")]
+            // Attempt: a run's own base classpath may default to main's resolved dependencies
+            // regardless of loadedMods (explaining why FreeTerraForged, on ftfFixture's own
+            // runtimeOnly/additionalRuntimeClasspathConfiguration, still never got discovered as a
+            // mod file in two prior attempts) -- try making ftfFixture this run's own primary
+            // sourceSet instead, so its own resolved runtime dependencies become the base.
+            sourceSet = sourceSets.ftfFixture
         }
 
         // MINECRAFT-500 / Wroosbit review 52775 finding 2+3: boots Dynamic Terrain + Layered

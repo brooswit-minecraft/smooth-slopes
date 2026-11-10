@@ -66,10 +66,18 @@ final class FreeTerraForgedPresetFixture {
 
     @SubscribeEvent
     static void gatherData(GatherDataEvent event) {
+        // Diagnostic (MINECRAFT-500 / Jira 52778): kept permanently, not just while narrowing this
+        // down -- two prior CI attempts reported "BUILD SUCCESSFUL" with zero providers run and no
+        // exception, so this is the only way to tell "gate failed" apart from "gate passed but
+        // something downstream silently produced nothing" from the log alone.
+        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} systemProperty({})={}",
+                event.includeServer(), FIXTURE_RUN_PROPERTY, System.getProperty(FIXTURE_RUN_PROPERTY));
         if (!event.includeServer() || System.getProperty(FIXTURE_RUN_PROPERTY) == null) {
             return;
         }
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);
+        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers, output={}",
+                output.getOutputFolder());
         CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider()
                 .thenApply(vanilla -> Presets.makeFTFDefault().buildPatch(vanilla));
         event.getGenerator().addProvider(true, DataGenUtil.createRegistryProvider(output, patch));

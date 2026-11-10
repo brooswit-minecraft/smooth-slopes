@@ -95,7 +95,25 @@ jobs:
           cache: gradle
 
       - name: Generate FreeTerraForged's default preset as an applied datapack
-        run: ./gradlew runFtfPresetData --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew runFtfPresetData --no-daemon 2>&1 | tee ftf-datagen.log
+
+      # MINECRAFT-500 / Jira 52778: two prior attempts reported "BUILD SUCCESSFUL" with the
+      # datapack directory never created at all, and no exception -- a green Gradle exit code
+      # proves nothing here. Fail closed on the actual generated output, not the task's exit code.
+      - name: Fail closed unless the datapack was actually generated
+        run: |
+          pack_dir=build/ftf-preset-data/freeterraforged_default_preset
+          if [ ! -f "$pack_dir/pack.mcmeta" ]; then
+            echo "Expected $pack_dir/pack.mcmeta to exist after runFtfPresetData -- it does not."
+            echo "--- ftf-datagen.log ---"
+            cat ftf-datagen.log
+            exit 1
+          fi
+          file_count=$(find "$pack_dir" -type f | wc -l)
+          echo "Generated datapack at $pack_dir: $file_count files"
+          find "$pack_dir" -type f
 
       - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
         run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
@@ -108,4 +126,58 @@ jobs:
           path: |
             ftf-acceptance-*.log
             ftf-acceptance-result.json
+            ftf-datagen.log
+          if-no-files-found: warn
+
+  # MINECRAFT-500 / Wroosbit review 52775, findings 2+3: the jobs above only ever coinstall this
+  # mod with Layered Slopes (+ FreeTerraForged); they never install Dynamic Terrain's own exact PR
+  # head alongside it, and the existing config-migration tests exercise file helpers only, not
+  # NeoForge's real config load/reload lifecycle. This builds Dynamic Terrain's own checkout at
+  # its coordinated branch head, then boots Dynamic Terrain + Layered Slopes + Smooth Slopes
+  # together through a real dedicated server three times: no legacy config (confirms the three
+  # coinstalled mods actually smooth vanilla terrain), a legacy global worldgenSmoothing=false
+  # (confirms the real migration lifecycle, not just the helper), and a legacy per-world override
+  # with no global override (confirms per-world precedence specifically).
+  paired-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: smooth-slopes
+
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-terrain
+          ref: minecraft-500-remove-duplicate-worldgen-smoothing
+          path: dynamic-terrain
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Record the exact coordinated commits under test
+        run: |
+          echo "smooth-slopes: $(cd smooth-slopes && git rev-parse HEAD)"
+          echo "dynamic-terrain: $(cd dynamic-terrain && git rev-parse HEAD)"
+
+      - name: Build Dynamic Terrain's own jar
+        run: cd dynamic-terrain && ./gradlew build --no-daemon -x test
+
+      - name: Run paired acceptance (Dynamic Terrain + Layered Slopes + Smooth Slopes)
+        run: |
+          dt_jar=$(ls dynamic-terrain/build/libs/*.jar | grep -v sources)
+          echo "Dynamic Terrain jar: $dt_jar"
+          python3 smooth-slopes/tools/paired-acceptance/paired_acceptance.py smooth-slopes "$(readlink -f "$dt_jar")"
+
+      - name: Preserve paired acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paired-acceptance
+          path: |
+            paired-acceptance-*.log
+            paired-acceptance-result.json
           if-no-files-found: warn
