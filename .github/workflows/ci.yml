@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Test release scripts
+        run: python3 -m unittest discover -s scripts
+
+      - name: Check the mod does not require a newer NeoForge than the pack runs
+        run: python3 scripts/check_neoforge_floor.py
+
+      - name: Build and test
+        run: ./gradlew build --no-daemon
+
+      # MINECRAFT-500 / Wroosbit review 52775: the shipped jar must never contain the
+      # FreeTerraForged acceptance fixture or anything FreeTerraForged-shaped -- that mod is
+      # entirely confined to the separate ftfFixture sourceSet (never main), and this is the
+      # fail-closed proof of that structural fact, not just an assertion in a comment.
+      - name: Fail closed if FreeTerraForged leaked into the shipped jar
+        run: |
+          jar_file=$(ls build/libs/*.jar | grep -v sources)
+          echo "Inspecting $jar_file"
+          if unzip -l "$jar_file" | grep -iq "freeterraforged\|etcodehome"; then
+            echo "FreeTerraForged classes/resources found in the shipped jar:"
+            unzip -l "$jar_file" | grep -i "freeterraforged\|etcodehome"
+            exit 1
+          fi
+          echo "Confirmed clean: no FreeTerraForged content in $jar_file"
+
+      # MINECRAFT-500 / mirrors Dynamic Terrain's own CoinstalledGameTests for the MINECRAFT-499
+      # split: coinstalled runtime proof, not just compile-time, that this mod actually boots
+      # together with Layered Slopes -- and, since this run's own loadedMods is now restricted to
+      # just this mod (see build.gradle), WITHOUT FreeTerraForged on its classpath at all,
+      # directly answering Wroosbit review 52775's "prove the packaged jar boots with only Layered
+      # Slopes" ask. Gradle reports BUILD SUCCESSFUL even when the GameTest server fails to start
+      # or ran zero tests, so check_gametest_count.py fails closed unless the exact expected count
+      # of named tests actually ran and passed.
+      - name: Run GameTests (coinstalled with ONLY Layered Slopes, no FreeTerraForged)
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
+          python3 scripts/check_gametest_count.py gametest.log
+          if grep -qi "freeterraforged" gametest.log; then
+            echo "FreeTerraForged unexpectedly present in the coinstalled GameTest run"
+            exit 1
+          fi
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: smooth-slopes
+          path: build/libs/*.jar
+          if-no-files-found: error
+
+  release-gate:
+    uses: brooswit-factory/release-gate/.github/workflows/gate.yml@v1
+    with:
+      gated-paths: '["^src/"]'
+      version-file: 'gradle.properties'
+
+  # MINECRAFT-500 / Jira review 52702/52703/52752: the coinstalled GameTest above proves this mod
+  # boots with Layered Slopes, but not that it actually smooths generated terrain under
+  # FreeTerraForged's own noise settings. This generates FreeTerraForged's real default preset as
+  # an applied datapack (FreeTerraForgedPresetFixture, headless, no GUI), then boots a real
+  # dedicated server twice (worldgenSmoothing on/off, same seed, same datapack) and checks over
+  # RCON for a layered block -- the one thing that can only exist if smoothing actually ran.
+  freeterraforged-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Generate FreeTerraForged's default preset as an applied datapack
+        run: |
+          set -o pipefail
+          ./gradlew runFtfPresetData --no-daemon 2>&1 | tee ftf-datagen.log
+
+      # MINECRAFT-500 / Jira 52778: two prior attempts reported "BUILD SUCCESSFUL" with the
+      # datapack directory never created at all, and no exception -- a green Gradle exit code
+      # proves nothing here. Fail closed on the actual generated output, not the task's exit code.
+      - name: Fail closed unless the datapack was actually generated
+        run: |
+          pack_dir=build/ftf-preset-data/freeterraforged_default_preset
+          if [ ! -f "$pack_dir/pack.mcmeta" ]; then
+            echo "Expected $pack_dir/pack.mcmeta to exist after runFtfPresetData -- it does not."
+            echo "--- ftf-datagen.log ---"
+            cat ftf-datagen.log
+            exit 1
+          fi
+          file_count=$(find "$pack_dir" -type f | wc -l)
+          echo "Generated datapack at $pack_dir: $file_count files"
+          find "$pack_dir" -type f
+
+      - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
+        run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
+
+      - name: Preserve FreeTerraForged acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeterraforged-acceptance
+          path: |
+            ftf-acceptance-*.log
+            ftf-acceptance-result.json
+            ftf-datagen.log
+          if-no-files-found: warn
+
+  # MINECRAFT-500 / Wroosbit review 52775, findings 2+3: the jobs above only ever coinstall this
+  # mod with Layered Slopes (+ FreeTerraForged); they never install Dynamic Terrain's own exact PR
+  # head alongside it, and the existing config-migration tests exercise file helpers only, not
+  # NeoForge's real config load/reload lifecycle. This builds Dynamic Terrain's own checkout at
+  # its coordinated branch head, then boots Dynamic Terrain + Layered Slopes + Smooth Slopes
+  # together through a real dedicated server three times: no legacy config (confirms the three
+  # coinstalled mods actually smooth vanilla terrain), a legacy global worldgenSmoothing=false
+  # (confirms the real migration lifecycle, not just the helper), and a legacy per-world override
+  # with no global override (confirms per-world precedence specifically).
+  paired-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: smooth-slopes
+
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-terrain
+          ref: minecraft-500-remove-duplicate-worldgen-smoothing
+          path: dynamic-terrain
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Record the exact coordinated commits under test
+        run: |
+          echo "smooth-slopes: $(cd smooth-slopes && git rev-parse HEAD)"
+          echo "dynamic-terrain: $(cd dynamic-terrain && git rev-parse HEAD)"
+
+      - name: Build Dynamic Terrain's own jar
+        run: cd dynamic-terrain && ./gradlew build --no-daemon -x test
+
+      - name: Run paired acceptance (Dynamic Terrain + Layered Slopes + Smooth Slopes)
+        run: |
+          dt_jar=$(ls dynamic-terrain/build/libs/*.jar | grep -v sources)
+          echo "Dynamic Terrain jar: $dt_jar"
+          python3 smooth-slopes/tools/paired-acceptance/paired_acceptance.py smooth-slopes "$(readlink -f "$dt_jar")"
+
+      # MINECRAFT-500 / Wroosbit review 52785 + self-review 52783: every scenario above boots a
+      # dedicated SERVER with the coordinated set, never a CLIENT -- the ticket requires both, and
+      # a client boot is also the only way to exercise the singleplayer/integrated-server side of
+      # the per-world migration fix (EarlyPerWorldLegacyMigration), which the dedicated-server-only
+      # fix could not cover at all.
+      - name: Install Xvfb for the headless client boot
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run paired client acceptance (exact coordinated set, real client boot + integrated-server per-world migration)
+        run: |
+          dt_jar=$(ls dynamic-terrain/build/libs/*.jar | grep -v sources)
+          python3 smooth-slopes/tools/paired-acceptance/paired_client_acceptance.py smooth-slopes "$(readlink -f "$dt_jar")"
+
+      - name: Preserve paired acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paired-acceptance
+          path: |
+            paired-acceptance-*.log
+            paired-acceptance-result.json
+            paired-client-acceptance*.log
+          if-no-files-found: warn
