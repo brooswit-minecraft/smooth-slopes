@@ -128,14 +128,16 @@ neoForge {
         // MINECRAFT-500 acceptance: a SEPARATE data run, output to build/ (never src/generated/
         // resources, so this never ships in the mod jar). FreeTerraForgedPresetFixture is on this
         // mod's own event bus and therefore present on the ordinary `data` run's classpath too; it
-        // only ever acts on THIS run, gated by the distinguishing --mod value below.
+        // only ever acts on THIS run, gated by the smoothslopes.ftfPresetFixture system property
+        // below -- NOT by --mod. --mod must stay the REAL mod id here (confirmed live:
+        // DatagenModLoader only adds a container's DataGenerator to the actually-run set when
+        // dataGeneratorConfig.getMods().contains(container.getModId()) -- a synthetic --mod value
+        // here left every registered provider created-but-never-run, with no error at all, which
+        // is exactly what the first real CI attempt showed).
         ftfPresetData {
             data()
-            // A distinguishing --mod value (not the real mod id), so FreeTerraForgedPresetFixture
-            // -- registered on this mod's own event bus and therefore present on every run's
-            // classpath -- can tell this run apart from the ordinary `data` run above and only
-            // ever write into build/, never into this mod's own shipped src/generated/resources.
-            programArguments.addAll '--mod', 'ftfpresetfixture', '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
+            programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
+            systemProperty 'smoothslopes.ftfPresetFixture', 'true'
         }
 
         configureEach {

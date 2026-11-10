@@ -23,77 +23,39 @@ import net.neoforged.neoforge.data.event.GatherDataEvent;
  * {@code PresetConfigScreen.exportAsDatapack} uses client-side (Jira review 52703), reproduced
  * headlessly here via FreeTerraForged's own public, server-safe API ({@code Preset.buildPatch}
  * plus {@link DataGenUtil#createRegistryProvider}), so no GUI or live world is needed to produce
- * it. This listener is on this mod's own event bus, so it is present (but inert) on every Gradle
- * run's classpath, including the ordinary {@code data} run that feeds this mod's own shipped
- * {@code src/generated/resources} -- {@link #gatherData} must only ever act for the dedicated
- * {@code ftfPresetData} run (see {@code build.gradle}'s distinguishing {@code --mod
- * ftfpresetfixture}, checked via {@link GatherDataEvent#getMods()}), or this fixture would end up
- * generated straight into this mod's own shipped jar instead of {@code build/ftf-preset-data/}.
- * The result is test fixture input for
- * {@code tools/freeterraforged-acceptance/ftf_acceptance.py}, never shipped. FreeTerraForged
- * itself is a compileOnly/runtimeOnly dev-tooling dependency (see
- * {@code downloadFreeTerraForged}), never declared in {@code neoforge.mods.toml} and never a real
- * dependency of this mod.
+ * it. This listener is on this mod's own event bus, so it is present (but must stay inert) on
+ * every Gradle run's classpath, including the ordinary {@code data} run that feeds this mod's own
+ * shipped {@code src/generated/resources}.
+ *
+ * <p>{@link #gatherData} gates on the {@code smoothslopes.ftfPresetFixture} system property (set
+ * only by {@code build.gradle}'s dedicated {@code ftfPresetData} run), not on {@code --mod}:
+ * confirmed live against a real CI run that NeoForge's {@code DatagenModLoader} only adds a
+ * container's {@code DataGenerator} to the set it actually runs when {@code --mod} contains that
+ * container's REAL mod id ({@code dataGeneratorConfig.getMods().contains(container.getModId())}
+ * gates {@code DataGeneratorConfig.makeGenerator}'s second, "will run" argument) -- a synthetic
+ * {@code --mod} value here left every provider registered but never executed, with a clean
+ * {@code BUILD SUCCESSFUL} and no error at all. {@code --mod} must stay this mod's real id so the
+ * generator is actually in the run set; the system property is what tells this run apart from the
+ * ordinary {@code data} run instead.
  */
 @EventBusSubscriber(modid = SmoothSlopesMod.MODID, bus = EventBusSubscriber.Bus.MOD)
 final class FreeTerraForgedPresetFixture {
     private static final String PACK_NAME = "freeterraforged_default_preset";
-    /** Must match build.gradle's {@code ftfPresetData} run's {@code --mod} argument exactly. */
-    private static final String FIXTURE_RUN_MARKER = "ftfpresetfixture";
+    /** Must match build.gradle's {@code ftfPresetData} run's systemProperty key exactly. */
+    private static final String FIXTURE_RUN_PROPERTY = "smoothslopes.ftfPresetFixture";
 
     private FreeTerraForgedPresetFixture() {}
 
     @SubscribeEvent
     static void gatherData(GatherDataEvent event) {
-        // Temporary diagnostic (MINECRAFT-500): the first real CI run produced zero output with
-        // no error, so log the exact gate inputs instead of guessing further from bytecode.
-        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} mods={}",
-                event.includeServer(), event.getMods());
-        if (!event.includeServer() || !event.getMods().contains(FIXTURE_RUN_MARKER)) {
-            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: gate failed, skipping");
+        if (!event.includeServer() || System.getProperty(FIXTURE_RUN_PROPERTY) == null) {
             return;
         }
-        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: registering providers");
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);
-        SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture.gatherData: PackOutput folder={}",
-                output.getOutputFolder());
-        CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider().thenApply(vanilla -> {
-            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: building FTF default preset patch");
-            try {
-                HolderLookup.Provider result = Presets.makeFTFDefault().buildPatch(vanilla);
-                SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: patch built successfully");
-                return result;
-            } catch (RuntimeException e) {
-                SmoothSlopesMod.LOGGER.error("FreeTerraForgedPresetFixture: buildPatch threw", e);
-                throw e;
-            }
-        });
-        DataProvider registryProvider = DataGenUtil.createRegistryProvider(output, patch);
-        event.getGenerator().addProvider(true, new LoggingProvider(registryProvider));
-        event.getGenerator().addProvider(true, new LoggingProvider(new PackMcmetaProvider(output)));
-    }
-
-    /** Temporary diagnostic (MINECRAFT-500): confirms run() is actually invoked, and how it ends. */
-    private record LoggingProvider(DataProvider delegate) implements DataProvider {
-        @Override
-        public CompletableFuture<?> run(CachedOutput cachedOutput) {
-            SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: running provider {}", delegate.getName());
-            CompletableFuture<?> future = delegate.run(cachedOutput);
-            return future.whenComplete((result, error) -> {
-                if (error != null) {
-                    SmoothSlopesMod.LOGGER.error("FreeTerraForgedPresetFixture: provider {} failed",
-                            delegate.getName(), error);
-                } else {
-                    SmoothSlopesMod.LOGGER.info("FreeTerraForgedPresetFixture: provider {} completed",
-                            delegate.getName());
-                }
-            });
-        }
-
-        @Override
-        public String getName() {
-            return delegate.getName();
-        }
+        CompletableFuture<HolderLookup.Provider> patch = event.getLookupProvider()
+                .thenApply(vanilla -> Presets.makeFTFDefault().buildPatch(vanilla));
+        event.getGenerator().addProvider(true, DataGenUtil.createRegistryProvider(output, patch));
+        event.getGenerator().addProvider(true, new PackMcmetaProvider(output));
     }
 
     /**
