@@ -23,9 +23,20 @@ import net.neoforged.neoforge.data.event.GatherDataEvent;
  * {@code PresetConfigScreen.exportAsDatapack} uses client-side (Jira review 52703), reproduced
  * headlessly here via FreeTerraForged's own public, server-safe API ({@code Preset.buildPatch}
  * plus {@link DataGenUtil#createRegistryProvider}), so no GUI or live world is needed to produce
- * it. This listener is on this mod's own event bus, so it is present (but must stay inert) on
- * every Gradle run's classpath, including the ordinary {@code data} run that feeds this mod's own
- * shipped {@code src/generated/resources}.
+ * it.
+ *
+ * <p><b>Isolation from the shipped jar (Wroosbit review 52775):</b> this class, its
+ * {@code PackMcmetaProvider}, and the FreeTerraForged dependency it compiles against all live in
+ * the separate {@code ftfFixture} sourceSet (see {@code build.gradle}), never {@code main} --
+ * reviewed evidence found this class and FreeTerraForged itself in the actual shipped
+ * {@code smoothslopes-*.jar} and on every other run's classpath (including the coinstalled
+ * GameTest, which was meant to prove Layered-Slopes-only coinstallation) when this lived in
+ * {@code main} with FreeTerraForged as a global dev dependency. {@code ftfFixture} is registered
+ * as its own NeoForge mod ({@code smoothslopesftffixture}, see its own
+ * {@code META-INF/neoforge.mods.toml}), and only the dedicated {@code ftfPresetData} run's
+ * {@code loadedMods} includes it; every other run (client/server/gameTestServer/the ordinary
+ * {@code data} run) is restricted to just {@code smoothslopes} and never sees this class or
+ * FreeTerraForged at all.
  *
  * <p>{@link #gatherData} gates on the {@code smoothslopes.ftfPresetFixture} system property (set
  * only by {@code build.gradle}'s dedicated {@code ftfPresetData} run), not on {@code --mod}:

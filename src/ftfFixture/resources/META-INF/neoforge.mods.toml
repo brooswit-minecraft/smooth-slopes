@@ -1,0 +1,38 @@
+modLoader="javafml" #mandatory
+loaderVersion="[1,)" #mandatory
+
+license="MIT"
+
+# Not templated like src/main/templates -- this mod file is never shipped (see build.gradle's
+# ftfFixture sourceSet and the ftfPresetData run's restricted loadedMods), so literal values here
+# are fine; nothing reads this file's own version/range for anything that matters.
+[[mods]] #mandatory
+modId="smoothslopesftffixture" #mandatory
+version="0.0.0" #mandatory
+displayName="Smooth Slopes FreeTerraForged acceptance fixture (dev/CI only, never shipped)"
+authors="brooswit"
+description='''MINECRAFT-500 CI-only fixture: generates FreeTerraForged's real default preset as
+an applied datapack for the freeterraforged-acceptance job. Lives in its own sourceSet/mod file so
+it and its FreeTerraForged dependency never end up in the shipped Smooth Slopes jar or on any
+other run's classpath -- see build.gradle's ftfPresetData run and its restricted loadedMods.'''
+
+[[dependencies.smoothslopesftffixture]]
+    modId="smoothslopes"
+    type="required"
+    versionRange="[0.0.0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.smoothslopesftffixture]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1.250,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.smoothslopesftffixture]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1]"
+    ordering="NONE"
+    side="BOTH"

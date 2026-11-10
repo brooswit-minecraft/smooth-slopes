@@ -30,16 +30,38 @@ jobs:
       - name: Build and test
         run: ./gradlew build --no-daemon
 
+      # MINECRAFT-500 / Wroosbit review 52775: the shipped jar must never contain the
+      # FreeTerraForged acceptance fixture or anything FreeTerraForged-shaped -- that mod is
+      # entirely confined to the separate ftfFixture sourceSet (never main), and this is the
+      # fail-closed proof of that structural fact, not just an assertion in a comment.
+      - name: Fail closed if FreeTerraForged leaked into the shipped jar
+        run: |
+          jar_file=$(ls build/libs/*.jar | grep -v sources)
+          echo "Inspecting $jar_file"
+          if unzip -l "$jar_file" | grep -iq "freeterraforged\|etcodehome"; then
+            echo "FreeTerraForged classes/resources found in the shipped jar:"
+            unzip -l "$jar_file" | grep -i "freeterraforged\|etcodehome"
+            exit 1
+          fi
+          echo "Confirmed clean: no FreeTerraForged content in $jar_file"
+
       # MINECRAFT-500 / mirrors Dynamic Terrain's own CoinstalledGameTests for the MINECRAFT-499
       # split: coinstalled runtime proof, not just compile-time, that this mod actually boots
-      # together with Layered Slopes. Gradle reports BUILD SUCCESSFUL even when the GameTest
-      # server fails to start or ran zero tests, so check_gametest_count.py fails closed unless
-      # the exact expected count of named tests actually ran and passed.
-      - name: Run GameTests (coinstalled with Layered Slopes)
+      # together with Layered Slopes -- and, since this run's own loadedMods is now restricted to
+      # just this mod (see build.gradle), WITHOUT FreeTerraForged on its classpath at all,
+      # directly answering Wroosbit review 52775's "prove the packaged jar boots with only Layered
+      # Slopes" ask. Gradle reports BUILD SUCCESSFUL even when the GameTest server fails to start
+      # or ran zero tests, so check_gametest_count.py fails closed unless the exact expected count
+      # of named tests actually ran and passed.
+      - name: Run GameTests (coinstalled with ONLY Layered Slopes, no FreeTerraForged)
         run: |
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
           python3 scripts/check_gametest_count.py gametest.log
+          if grep -qi "freeterraforged" gametest.log; then
+            echo "FreeTerraForged unexpectedly present in the coinstalled GameTest run"
+            exit 1
+          fi
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4
@@ -74,11 +96,6 @@ jobs:
 
       - name: Generate FreeTerraForged's default preset as an applied datapack
         run: ./gradlew runFtfPresetData --no-daemon
-
-      - name: Diagnostic -- show what the datagen step actually produced
-        run: |
-          find build -maxdepth 5 2>&1
-          find . -maxdepth 1 -newer gradle.properties 2>&1 || true
 
       - name: Run FreeTerraForged acceptance (enabled vs disabled, same seed)
         run: python3 tools/freeterraforged-acceptance/ftf_acceptance.py . build/ftf-preset-data/freeterraforged_default_preset
