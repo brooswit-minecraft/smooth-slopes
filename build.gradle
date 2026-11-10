@@ -176,6 +176,19 @@ neoForge {
             loadedMods = [mods.getByName("${mod_id}"), mods.getByName("${mod_id}ftffixture")]
         }
 
+        // MINECRAFT-500 / Wroosbit review 52775 finding 2+3: boots Dynamic Terrain + Layered
+        // Slopes + Smooth Slopes together, at their exact coordinated PR heads, through a real
+        // dedicated server (not three separate coinstalled-pairs tests). Dynamic Terrain's own
+        // built jar is supplied via the dtJarPath project property (tools/paired-acceptance/
+        // paired_acceptance.py passes it after building Dynamic Terrain's own checkout), added to
+        // this run's own additionalRuntimeClasspathConfiguration in dependencies{} below -- the
+        // same mechanism layered-slopes' jar already relies on to be discovered as a real mod.
+        pairedServer {
+            server()
+            programArgument '--nogui'
+            loadedMods = [mods.getByName("${mod_id}")]
+        }
+
         configureEach {
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
@@ -190,12 +203,32 @@ dependencies {
     // Dev/CI-tooling only (see downloadFreeTerraForged above), and ONLY on the ftfFixture
     // sourceSet's own configurations -- never main's -- so it never reaches the shipped jar or any
     // other run's classpath (Wroosbit review 52775). Never jarJar'd either way.
+    // compileOnly only: compiles FreeTerraForgedPresetFixture against FreeTerraForged's real
+    // classes. A sourceSet's own runtimeOnly dependency does NOT ride along with its ModModel at
+    // run time -- confirmed live: the "smoothslopesftffixture" mod file was found and loaded, but
+    // FreeTerraForged's own jar was absent from that same run's classpath entirely, with
+    // ftfFixtureRuntimeOnly declared. The actual runtime jar is added to the specific run's own
+    // additionalRuntimeClasspathConfiguration below instead, which is the mechanism that
+    // genuinely controls a run's classpath contents.
     ftfFixtureCompileOnly files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged"))
-    ftfFixtureRuntimeOnly files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged"))
 
     testImplementation platform("org.junit:junit-bom:5.11.4")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+
+    // The actual mechanism that puts a jar on one specific run's classpath: each run's own
+    // additionalRuntimeClasspathConfiguration (see the comment on ftfFixtureCompileOnly above for
+    // why a sourceSet's own runtimeOnly dependency does not do this).
+    add(neoForge.runs.getByName("ftfPresetData").additionalRuntimeClasspathConfiguration.name,
+            files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged")))
+    // MINECRAFT-500 paired acceptance only: Dynamic Terrain's own independently-built jar, passed
+    // in by tools/paired-acceptance/paired_acceptance.py via -PdtJarPath=<path>. Absent for every
+    // other invocation (including a plain ./gradlew build), so this is conditional -- the
+    // pairedServer run simply has no extra classpath entries when it's absent, never an error.
+    if (project.hasProperty('dtJarPath')) {
+        add(neoForge.runs.getByName("pairedServer").additionalRuntimeClasspathConfiguration.name,
+                files(project.property('dtJarPath')))
+    }
 }
 
 test {
