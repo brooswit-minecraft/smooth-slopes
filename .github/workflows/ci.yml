@@ -172,6 +172,19 @@ jobs:
           echo "Dynamic Terrain jar: $dt_jar"
           python3 smooth-slopes/tools/paired-acceptance/paired_acceptance.py smooth-slopes "$(readlink -f "$dt_jar")"
 
+      # MINECRAFT-500 / Wroosbit review 52785 + self-review 52783: every scenario above boots a
+      # dedicated SERVER with the coordinated set, never a CLIENT -- the ticket requires both, and
+      # a client boot is also the only way to exercise the singleplayer/integrated-server side of
+      # the per-world migration fix (EarlyPerWorldLegacyMigration), which the dedicated-server-only
+      # fix could not cover at all.
+      - name: Install Xvfb for the headless client boot
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run paired client acceptance (exact coordinated set, real client boot + integrated-server per-world migration)
+        run: |
+          dt_jar=$(ls dynamic-terrain/build/libs/*.jar | grep -v sources)
+          python3 smooth-slopes/tools/paired-acceptance/paired_client_acceptance.py smooth-slopes "$(readlink -f "$dt_jar")"
+
       - name: Preserve paired acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -180,4 +193,5 @@ jobs:
           path: |
             paired-acceptance-*.log
             paired-acceptance-result.json
+            paired-client-acceptance*.log
           if-no-files-found: warn

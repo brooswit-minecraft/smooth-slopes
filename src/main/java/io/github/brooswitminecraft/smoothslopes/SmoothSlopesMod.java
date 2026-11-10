@@ -39,7 +39,7 @@ public class SmoothSlopesMod {
             FEATURES.register("smooth_surface", () -> new SmoothSurfaceFeature(NoneFeatureConfiguration.CODEC));
 
     public SmoothSlopesMod(IEventBus modEventBus, ModContainer modContainer) {
-        migrateDedicatedServerPerWorldLegacyConfig();
+        EarlyPerWorldLegacyMigration.migrateAll(Path.of("."), LOGGER);
         modContainer.registerConfig(ModConfig.Type.SERVER, SmoothSlopesConfig.SPEC);
         FEATURES.register(modEventBus);
         NeoForge.EVENT_BUS.addListener(SmoothSlopesMod::onServerAboutToStart);
@@ -47,27 +47,8 @@ public class SmoothSlopesMod {
     }
 
     /**
-     * Primary per-world migration path (see {@link DedicatedServerLevelName}'s own doc for why
-     * {@link #onServerAboutToStart} below runs too late): reads {@code server.properties}
-     * directly, at mod construction -- long before any server starts, and so before NeoForge's
-     * own per-world config correction ever touches Dynamic Terrain's legacy file.
-     */
-    private static void migrateDedicatedServerPerWorldLegacyConfig() {
-        String levelName = DedicatedServerLevelName.read(Path.of("server.properties"));
-        Path worldConfigDir = Path.of(levelName, "serverconfig");
-        Path legacyFile = worldConfigDir.resolve("dynamicterrain-server.toml");
-        Path ownFile = worldConfigDir.resolve("smoothslopes-server.toml");
-        try {
-            PerWorldConfigMigration.migrate(legacyFile, ownFile);
-        } catch (IOException e) {
-            LOGGER.warn("Could not migrate per-world worldgenSmoothing override to {}: {}", ownFile, e.toString());
-        }
-    }
-
-    /**
-     * Fallback only, for launches {@link #migrateDedicatedServerPerWorldLegacyConfig} cannot
-     * cover (e.g. an integrated/singleplayer server, which has no {@code server.properties} next
-     * to its working directory at all): NeoForge itself resolves this world's {@code serverconfig}
+     * Fallback only, for a save created or legacy-config-edited after mod construction (so
+     * {@link EarlyPerWorldLegacyMigration} never saw it): NeoForge itself resolves this world's {@code serverconfig}
      * override directory and reloads SERVER configs against it right before firing this same event
      * (see {@code ServerLifecycleHooks.handleServerAboutToStart}). By then Dynamic Terrain's own
      * legacy file may already have been corrected and the key lost (confirmed live for the

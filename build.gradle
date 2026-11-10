@@ -273,6 +273,14 @@ if (project.hasProperty('dtJarPath')) {
     tasks.named('runPairedServer').configure {
         classpathProvider.from(files(project.property('dtJarPath')))
     }
+    // MINECRAFT-500 / Wroosbit review 52785 + self-review 52783: the exact coordinated set
+    // (Dynamic Terrain + Layered Slopes + Smooth Slopes) has never been booted as a CLIENT at
+    // all, only as a dedicated server -- the ticket requires both. Reuses the existing `client`
+    // run (already supports --quickPlaySingleplayer via the `quickPlay` project property) rather
+    // than a separate run, since nothing else about it needs to differ.
+    tasks.named('runClient').configure {
+        classpathProvider.from(files(project.property('dtJarPath')))
+    }
 }
 
 test {
