@@ -38,11 +38,21 @@ import time
 from pathlib import Path
 
 RCON_PASSWORD = "acceptance"
-SEED = 500500501
+# 500500501 (one off from ftf_acceptance.py's own proven-good 500500500) was tried first and
+# confirmed live, by direct RCON height probing, to be open ocean for at least a 48-block radius
+# around spawn -- SmoothSurfaceFeature only ever touches natural ground columns, so a baseline
+# scenario that is pure ocean can never produce a layered block no matter how correctly smoothing
+# is wired up. Seed 0 confirmed live (same probe) to have real, varied land with multiple natural
+# 1-block steps within this exact grid.
+SEED = 0
 GRID_RANGE = range(-16, 17, 8)  # 5x5 = 25 columns, same bound as ftf_acceptance.py
 LAYERED_SURFACE_BLOCKS = ["layered_dirt", "layered_grass", "layered_stone"]
-TOP_Y = 110
-BOTTOM_Y = 40
+# Matches ftf_acceptance.py's own TOP_Y/BOTTOM_Y exactly (160/0): a narrower 110/40 window was
+# tried first and, confirmed live, missed every eligible column in plain vanilla terrain at this
+# seed/grid -- vanilla height variation is not guaranteed to land inside an arbitrarily narrower
+# band than the one already proven wide enough for FreeTerraForged's own (larger) terrain.
+TOP_Y = 160
+BOTTOM_Y = 0
 SUCCESS_MARKER = "Changed the block at"
 MARKER_POS = (0, 250, 0)
 
@@ -217,6 +227,14 @@ def main():
     def global_legacy_disabled(game_dir, level_name):
         config_dir = game_dir / 'config'
         config_dir.mkdir(parents=True, exist_ok=True)
+        # The migrated default only ever applies on smoothslopes-server.toml's OWN first write --
+        # confirmed live that the baseline scenario above, run first in this same game_dir, already
+        # wrote one (with the un-migrated default, since it saw no legacy file) before this scenario
+        # boots. NeoForge's config system then reuses that already-persisted value regardless of
+        # what the legacy file says, since only a config file's first write ever takes a migrated
+        # default -- this scenario must start from a genuinely fresh global config, the same as a
+        # real server upgrading for the first time would.
+        (config_dir / 'smoothslopes-server.toml').unlink(missing_ok=True)
         (config_dir / 'dynamicterrain-server.toml').write_text("worldgenSmoothing = false\n")
 
     hits, game_dir, _ = run_scenario(repo_dir, dt_jar_path, "global-legacy-disabled", 25601, 25611,
@@ -236,6 +254,10 @@ def main():
             f"still produced {len(hits)} layered block(s): {hits[:3]}")
 
     def per_world_legacy_disabled(game_dir, level_name):
+        # Same reason as global_legacy_disabled above: this scenario needs global absent to mean
+        # a genuinely fresh (migrated-true) global default, not whatever the previous scenario's
+        # own global config already persisted to disk.
+        (game_dir / 'config' / 'smoothslopes-server.toml').unlink(missing_ok=True)
         world_config_dir = game_dir / level_name / 'serverconfig'
         world_config_dir.mkdir(parents=True, exist_ok=True)
         (world_config_dir / 'dynamicterrain-server.toml').write_text("worldgenSmoothing = false\n")

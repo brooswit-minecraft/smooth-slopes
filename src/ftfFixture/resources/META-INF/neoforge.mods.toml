@@ -1,0 +1,33 @@
+modLoader="javafml" #mandatory
+loaderVersion="[1,)" #mandatory
+
+license="MIT"
+
+# MINECRAFT-500 / Wroosbit review 52775: a mods.toml purely so FML's normal mod-jar discovery
+# incorporates this sourceSet's compiled output into the same merged classloader layer as `main`
+# -- without that, Class.forName from SmoothSlopesMod could not see this class at all even though
+# it was genuinely present on the launched JVM's own classpath (confirmed live: a raw, undeclared
+# sourceSet directory with no mods.toml is never pulled into FML's game layer, unlike a real
+# dependency jar such as FreeTerraForged's own, which IS discovered by plain classpath presence
+# because it ships its own mods.toml). No @EventBusSubscriber/@SubscribeEvent scanning is needed
+# here -- FreeTerraForgedPresetFixture.register is still called directly by reflection, never by
+# FML's own event dispatch -- so this mod's only job is to exist long enough to be discovered.
+[[mods]] #mandatory
+modId="smoothslopesftffixture"
+version="1.0.0"
+displayName="Smooth Slopes FreeTerraForged Acceptance Fixture"
+description='''MINECRAFT-500 acceptance-only fixture, never shipped; see FreeTerraForgedPresetFixture's own class doc.'''
+
+[[dependencies.smoothslopesftffixture]]
+    modId="neoforge"
+    type="required"
+    versionRange="[0,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.smoothslopesftffixture]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1,)"
+    ordering="NONE"
+    side="BOTH"

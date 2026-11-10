@@ -28,53 +28,52 @@ import net.neoforged.neoforge.data.event.GatherDataEvent;
  * it.
  *
  * <p><b>Isolation from the shipped jar (Wroosbit review 52775):</b> this class, its
- * {@code PackMcmetaProvider}, and the FreeTerraForged dependency it compiles against all live in
- * the separate {@code ftfFixture} sourceSet (see {@code build.gradle}), never {@code main}.
+ * {@code PackMcmetaProvider}, {@link FtfFixtureModEntryPoint}, and the FreeTerraForged dependency
+ * it compiles against all live in the separate {@code ftfFixture} sourceSet (see
+ * {@code build.gradle}), never {@code main}. {@code main} has no compile-time or reflective
+ * reference to anything in this sourceSet at all.
  *
- * <p><b>Why no {@code @EventBusSubscriber}/own mod file (three prior attempts, each confirmed
- * live against real CI runs):</b>
+ * <p><b>Why this is its own separate mod, registered from its own constructor (four prior attempts
+ * at other mechanisms, each confirmed live against real CI/local runs):</b>
  * <ol>
  * <li>A sourceSet's own {@code runtimeOnly} dependency does not ride along with that sourceSet's
  * own {@code ModModel} at run time -- FreeTerraForged's jar was absent from the run's classpath
  * even though the fixture's own mod file loaded.</li>
  * <li>{@code RunModel.additionalRuntimeClasspathConfiguration} did not fix that either --
- * {@code "All providers took: 0 ms, total files: 0"}, zero providers ever ran.</li>
+ * {@code "All providers took: 0 ms, total files: 0"}, zero providers ever ran. Decompiling
+ * moddev-gradle 2.0.147 later confirmed why: that configuration never feeds
+ * {@code RunGameTask.classpathProvider}, the only file collection actually concatenated onto the
+ * real launched JVM's classpath.</li>
  * <li>Making {@code ftfFixture} the run's primary {@code sourceSet} got the mod file "found" and
  * even "Attempting to inject @EventBusSubscriber classes" logged for it, but the annotation scan
- * itself found nothing -- no "Scanning class FreeTerraForgedPresetFixture" line ever appeared, and
- * {@link #gatherData} itself never logged anything, in any of these attempts.</li>
+ * itself found nothing.</li>
+ * <li>Putting this class's compiled output directly on {@code classpathProvider} (confirmed
+ * present in a live dump of {@code System.getProperty("java.class.path")}) and having
+ * {@code SmoothSlopesMod} (in {@code main}) reflectively {@code Class.forName} it still threw
+ * {@code ClassNotFoundException} -- FML loads each declared mod into its own isolated module, so a
+ * different mod's {@code Class.forName} can never see this class regardless of raw classpath
+ * presence.</li>
  * </ol>
- * Given three different failures all specifically in getting this class discovered/scanned as its
- * own separate NeoForge mod, this class is no longer one: it has no {@code @EventBusSubscriber}
- * and no {@code META-INF/neoforge.mods.toml} of its own. {@link SmoothSlopesMod} (in {@code main},
- * where annotation scanning is unambiguously proven to work every single run) looks this class up
- * by name via plain reflection and calls {@link #register} directly -- ordinary JVM classloading,
- * not NeoForge's mod-file discovery, is the only thing this now depends on. {@code main} never
- * references this class directly (no compile-time dependency either direction), so a normal
- * build where this class is absent from the classpath entirely (every run except the dedicated
- * {@code ftfPresetData} one) is unaffected; {@code SmoothSlopesMod}'s lookup simply catches
- * {@code ClassNotFoundException} and does nothing.
+ * The only mechanism that actually works: this sourceSet is a real, separate NeoForge mod
+ * ({@code smoothslopesftffixture}, see its own {@code neoforge.mods.toml}), and
+ * {@link FtfFixtureModEntryPoint} -- that mod's own {@code @Mod} constructor, in its own module --
+ * registers {@link #register} on its own injected event bus. No cross-module visibility is needed
+ * at all, and {@code main} is left with zero knowledge of this fixture's existence.
  */
 public final class FreeTerraForgedPresetFixture {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String PACK_NAME = "freeterraforged_default_preset";
-    /** Must match build.gradle's {@code ftfPresetData} run's systemProperty key exactly. */
-    private static final String FIXTURE_RUN_PROPERTY = "smoothslopes.ftfPresetFixture";
 
     private FreeTerraForgedPresetFixture() {}
 
-    /** Called reflectively by {@code SmoothSlopesMod} -- see this class's own doc for why. */
+    /** Called by {@link FtfFixtureModEntryPoint}'s own constructor -- see this class's own doc. */
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(FreeTerraForgedPresetFixture::gatherData);
     }
 
     static void gatherData(GatherDataEvent event) {
-        // Diagnostic (MINECRAFT-500 / Jira 52778): kept permanently, not just while narrowing this
-        // down -- "BUILD SUCCESSFUL" with zero providers run and no exception has already happened
-        // three times, so the log itself must be able to show which branch gatherData took.
-        LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={} systemProperty({})={}",
-                event.includeServer(), FIXTURE_RUN_PROPERTY, System.getProperty(FIXTURE_RUN_PROPERTY));
-        if (!event.includeServer() || System.getProperty(FIXTURE_RUN_PROPERTY) == null) {
+        LOGGER.info("FreeTerraForgedPresetFixture.gatherData: includeServer={}", event.includeServer());
+        if (!event.includeServer()) {
             return;
         }
         PackOutput output = event.getGenerator().getPackOutput(PACK_NAME);

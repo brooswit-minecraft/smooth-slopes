@@ -113,9 +113,14 @@ def seed_datapack(game_dir, level_name, datapack_dir):
 
 
 def run_server(cwd, log_path, ready_deadline=420):
+    # runFtfAcceptanceServer, not runServer: the applied datapack is a real registry patch built
+    # from FreeTerraForged's own preset, referencing FreeTerraForged's own custom registry entries
+    # directly -- confirmed live that the ordinary `server` run (no FreeTerraForged on its
+    # classpath) fails registry load with "Unknown registry key... freeterraforged:fast_poission"
+    # and never starts. See that run's own comment in build.gradle.
     log = open(log_path, 'w')
     process = subprocess.Popen(
-        ['./gradlew', 'runServer', '--no-daemon', '-Dorg.gradle.jvmargs=-Xmx2G'],
+        ['./gradlew', 'runFtfAcceptanceServer', '--no-daemon', '-Dorg.gradle.jvmargs=-Xmx2G'],
         cwd=cwd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.monotonic() + ready_deadline
     while time.monotonic() < deadline:

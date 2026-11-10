@@ -142,6 +142,22 @@ neoForge {
             loadedMods = [mods.getByName("${mod_id}")]
         }
 
+        // MINECRAFT-500 acceptance only: the datapack FreeTerraForgedPresetFixture generates is a
+        // real registry PATCH built from FreeTerraForged's own preset, so it references
+        // FreeTerraForged's own custom registry entries directly (e.g. its own
+        // placement_modifier_type codecs) -- confirmed live: loading that datapack on the ordinary
+        // `server` run (no FreeTerraForged on its classpath at all) threw "Unknown registry key...
+        // freeterraforged:fast_poission" and the server never started. This run is otherwise
+        // identical to `server`; only FreeTerraForged's jar is added to its own
+        // classpathProvider below, dev/CI-tooling only, so the ordinary `server` run real users
+        // and other local testing rely on stays completely untouched by FreeTerraForged.
+        ftfAcceptanceServer {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            loadedMods = [mods.getByName("${mod_id}")]
+        }
+
         data {
             data()
             programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
@@ -149,24 +165,21 @@ neoForge {
         }
 
         // MINECRAFT-500 acceptance: a SEPARATE data run, output to build/ (never src/generated/
-        // resources, so this never ships in the mod jar). loadedMods stays just the real mod --
-        // FreeTerraForgedPresetFixture is not a NeoForge mod of its own (see its own class doc:
-        // three different attempts at making it one each failed in a different way). Its compiled
-        // output and FreeTerraForged's own jar are added to ONLY this run's
-        // additionalRuntimeClasspathConfiguration below, purely so plain JVM classloading
-        // (SmoothSlopesMod's reflective Class.forName lookup) can find them -- not NeoForge's own
-        // mod-file discovery, which is exactly the mechanism that kept failing.
+        // resources, so this never ships in the mod jar). This run's whole purpose is
+        // FreeTerraForgedPresetFixture's own data providers, registered by its own separate mod
+        // (smoothslopesftffixture, see its own class doc for why it is its own mod and not part of
+        // this project's main sourceSet/loadedMods at all) -- loadedMods stays just the real
+        // smoothslopes mod; the fixture mod is discovered by plain classpath presence (its compiled
+        // output + FreeTerraForged's own jar are on this run's classpathProvider, set below) the
+        // same way any third-party dependency jar with its own mods.toml is.
         //
-        // --mod stays the REAL mod id, not a synthetic marker: confirmed live that
+        // --mod must be the FIXTURE's own mod id, not smoothslopes': confirmed live that
         // DatagenModLoader only adds a container's DataGenerator to the actually-run set when
-        // dataGeneratorConfig.getMods().contains(container.getModId()) -- a synthetic --mod value
-        // here left every registered provider created-but-never-run, with no error at all, which
-        // is exactly what the first real CI attempt showed. The system property is what tells
-        // this run apart from the ordinary `data` run above.
+        // dataGeneratorConfig.getMods().contains(container.getModId()) -- this run has nothing to
+        // gather from smoothslopes' own DataGenerator at all.
         ftfPresetData {
             data()
-            programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
-            systemProperty 'smoothslopes.ftfPresetFixture', 'true'
+            programArguments.addAll '--mod', 'smoothslopesftffixture', '--all', '--output', file('build/ftf-preset-data/').getAbsolutePath()
             loadedMods = [mods.getByName("${mod_id}")]
         }
 
@@ -199,28 +212,66 @@ dependencies {
     // FreeTerraForgedPresetFixture against FreeTerraForged's real classes; never jarJar'd.
     ftfFixtureCompileOnly files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged"))
 
+    // ftfFixture is declared in neoForge.mods{} below, but moddev-gradle only wires its automatic
+    // Minecraft/NeoForge/slf4j/gson compile dependencies onto the ModModel it was given at
+    // configuration time for OTHER purposes -- confirmed live: compileFtfFixtureJava failed with
+    // "package org.slf4j does not exist" and the same for every Minecraft/NeoForge import without
+    // this. Mirroring main's own compile classpath (which the neoForge{} extension already
+    // successfully wires against the real userdev artifacts) replaces exactly what was missing.
+    ftfFixtureCompileOnly files(sourceSets.main.compileClasspath)
+
     testImplementation platform("org.junit:junit-bom:5.11.4")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
-    // Puts FreeTerraForgedPresetFixture's own compiled output and FreeTerraForged's jar on ONLY
-    // the ftfPresetData run's classpath, for plain JVM classloading (SmoothSlopesMod's reflective
-    // Class.forName lookup) to find -- not NeoForge's own mod-file discovery, which three
-    // different prior attempts (sourceSet runtimeOnly, this same additionalRuntimeClasspath
-    // mechanism used for mod discovery instead of plain classloading, and overriding the run's
-    // primary sourceSet) each failed to get working. See FreeTerraForgedPresetFixture's own class
-    // doc for the detailed history.
-    add(neoForge.runs.getByName("ftfPresetData").additionalRuntimeClasspathConfiguration.name,
-            sourceSets.ftfFixture.output)
-    add(neoForge.runs.getByName("ftfPresetData").additionalRuntimeClasspathConfiguration.name,
-            files(freeTerraForgedJar).builtBy(tasks.named("downloadFreeTerraForged")))
-    // MINECRAFT-500 paired acceptance only: Dynamic Terrain's own independently-built jar, passed
-    // in by tools/paired-acceptance/paired_acceptance.py via -PdtJarPath=<path>. Absent for every
-    // other invocation (including a plain ./gradlew build), so this is conditional -- the
-    // pairedServer run simply has no extra classpath entries when it's absent, never an error.
-    if (project.hasProperty('dtJarPath')) {
-        add(neoForge.runs.getByName("pairedServer").additionalRuntimeClasspathConfiguration.name,
-                files(project.property('dtJarPath')))
+}
+
+// MINECRAFT-500 / Wroosbit review 52775: `RunModel.additionalRuntimeClasspathConfiguration` was
+// proven live (a CI dump of this exact run's own `System.getProperty("java.class.path")`,
+// containing neither FreeTerraForgedPresetFixture's compiled output nor FreeTerraForged's jar, only
+// main's own output/resources plus whatever rides along via main's ordinary runtimeOnly deps) to
+// never reach the actual launched JVM's classpath at all. Decompiling moddev-gradle 2.0.147's
+// ModDevRunWorkflow confirms why: additionalRuntimeClasspathConfiguration only feeds a separate
+// internal legacy-classpath/mod-discovery mechanism -- the only ConfigurableFileCollection ever
+// concatenated onto RunGameTask's real JavaExec classpath is its own `classpathProvider`, and the
+// only thing the plugin itself ever adds to that is RunModel.sourceSet's runtime classpath.
+// Appending directly to classpathProvider is the mechanism confirmed to actually put
+// FreeTerraForgedPresetFixture's compiled output (with its own neoforge.mods.toml, declaring the
+// separate smoothslopesftffixture mod -- see its class doc) and FreeTerraForged's own jar on the
+// real classpath, where FML's ordinary classpath-scanning mod discovery picks both up as real mods
+// for this run alone.
+// A raw sourceSet output directory does not work here: FML's mod-file candidate scanner treats
+// `build/classes/java/ftfFixture` and `build/resources/ftfFixture` as two INDEPENDENT classpath
+// roots and only recognizes the one containing neoforge.mods.toml (the resources dir) as a mod
+// file at all -- confirmed live: "Creating FMLModContainer instance for []", an empty class list,
+// because none of the actual compiled classes were ever part of that same mod file. Packaging into
+// one real jar (exactly how FreeTerraForged's own jar is discovered, which has worked every time)
+// avoids that split entirely.
+def ftfFixtureJar = tasks.register('ftfFixtureJar', Jar) {
+    from sourceSets.ftfFixture.output
+    archiveBaseName = 'smoothslopes-ftffixture'
+    destinationDirectory = layout.buildDirectory.dir('ftf-fixture-jar')
+}
+
+tasks.named('runFtfPresetData').configure {
+    classpathProvider.from(ftfFixtureJar)
+    classpathProvider.from(files(freeTerraForgedJar).builtBy(tasks.named('downloadFreeTerraForged')))
+}
+
+// See ftfAcceptanceServer's own comment above: the generated datapack's registry patch needs
+// FreeTerraForged's own custom registry entries resolvable at actual server boot, not just at
+// datagen time.
+tasks.named('runFtfAcceptanceServer').configure {
+    classpathProvider.from(files(freeTerraForgedJar).builtBy(tasks.named('downloadFreeTerraForged')))
+}
+
+// MINECRAFT-500 paired acceptance only: Dynamic Terrain's own independently-built jar, passed in by
+// tools/paired-acceptance/paired_acceptance.py via -PdtJarPath=<path>. Absent for every other
+// invocation (including a plain ./gradlew build), so this is conditional -- the pairedServer run
+// simply has no extra classpath entries when it's absent, never an error.
+if (project.hasProperty('dtJarPath')) {
+    tasks.named('runPairedServer').configure {
+        classpathProvider.from(files(project.property('dtJarPath')))
     }
 }
 
