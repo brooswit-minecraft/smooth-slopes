@@ -5,71 +5,48 @@ import io.github.brooswitminecraft.layeredslopes.LayerMath;
 import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopes.LayeredSlopesMod;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
 import com.mojang.serialization.Codec;
-
-import it.unimi.dsi.fastutil.longs.LongSet;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
-import net.minecraft.world.level.levelgen.structure.BoundingBox;
-import net.minecraft.world.level.levelgen.structure.Structure;
-import net.minecraft.world.level.levelgen.structure.StructurePiece;
-import net.minecraft.world.level.levelgen.structure.StructureStart;
 
 /**
- * Worldgen smoothing: runs once per newly generated chunk in the
- * top_layer_modification step and replaces 1-block steps on the surface with
- * layered blocks, so slopes are smoother. It only edits the chunk's own
- * columns. Its target comes from the generator's own natural heights
- * ({@link SurfaceSmoother}), so two neighbouring chunks agree along their edge.
+ * EXPERIMENTAL (MINECRAFT-500, branch minecraft-500-no-structure-guard): worldgen smoothing with
+ * NO structure-footprint guard at all, for direct before/after comparison against the per-piece
+ * guard on minecraft-504-piece-structure-protection. John never actually asked for structure
+ * protection -- it was inherited unquestioned from Dynamic Terrain's own pre-extraction code; this
+ * branch measures the real tradeoffs (exposed-slope improvement vs. structure/door/path/foundation
+ * side effects) with it removed, before any decision on which (if either) ships.
  *
- * <p>It leaves a column alone unless the surface is plain natural ground: the top
- * block must have a layered form, the cell above it must be air (no trees, plants
- * or water), the cell below must be solid, and the column must not fall inside any
- * individual PIECE of a generated structure (village, outpost, etc. — checked
- * directly against the chunk's own structure starts/references, not inferred from
- * blocks, so an open plaza or a door's terrain-adaptation beard is protected even
- * with nothing placed directly above it). Deliberately per piece, not one box for
- * the whole structure: a structure's own outer bounding box is the union of every
- * piece's box, which for pieces that wind or scatter (a mineshaft's tunnels, most
- * of all) can be far larger than anything actually built -- confirmed live against
- * a real generated mineshaft, whose single whole-structure box protected 70%+ of a
- * sampled area with no mineshaft block anywhere near its surface. A thin vanilla snow layer counts as plain
- * ground in its own right: unlike every other natural ground top, it doesn't
- * block motion ({@code Blocks.SNOW} is {@code forceSolidOff}), so it has to be
- * explicitly discovered in {@link #groundHeight} rather than simply being the
- * block the usual height scan stops on. Once discovered, smoothing can
- * thicken or thin it exactly like any other material, directly in its own
- * cell, so the result always sits flush with whatever is solid beneath it —
- * resolved to {@link LayeredSlopesMod#LAYERED_SNOW_BLOCK} directly here
- * rather than through {@link SmoothMaterials}, so this stays a worldgen-only
- * behaviour and does not also make thin snow erodible or hand-gradable like a
- * registered material would. The one place that needs its own case is a
- * rising surface, where the snow's own cell has to become a genuinely full
- * block first — unlike every other natural ground top, thin snow is not
- * already a full cube, so a new cell added above it would otherwise float.
- * Roads and farms have no layered form at all, so they are untouched for a
- * different reason. If a structure merely
- * referenced from this chunk cannot be resolved (its start chunk is outside the
- * worldgen region's cache), the whole chunk is left untouched rather than risk
- * smoothing part of its footprint ({@link StructureProtection}). Gated by
- * {@code worldgenSmoothing}.
+ * <p>Runs once per newly generated chunk in the top_layer_modification step and replaces 1-block
+ * steps on the surface with layered blocks, so slopes are smoother. It only edits the chunk's own
+ * columns. Its target comes from the generator's own natural heights ({@link SurfaceSmoother}),
+ * so two neighbouring chunks agree along their edge.
+ *
+ * <p>It leaves a column alone unless the surface is plain natural ground: the top block must have
+ * a layered form, the cell above it must be air (no trees, plants or water), and the cell below
+ * must be solid. These material/cover/support checks are unchanged from the guarded version. A
+ * thin vanilla snow layer counts as plain ground in its own right: unlike every other natural
+ * ground top, it doesn't block motion ({@code Blocks.SNOW} is {@code forceSolidOff}), so it has to
+ * be explicitly discovered in {@link #groundHeight} rather than simply being the block the usual
+ * height scan stops on. Once discovered, smoothing can thicken or thin it exactly like any other
+ * material, directly in its own cell, so the result always sits flush with whatever is solid
+ * beneath it -- resolved to {@link LayeredSlopesMod#LAYERED_SNOW_BLOCK} directly here rather than
+ * through {@link SmoothMaterials}, so this stays a worldgen-only behaviour and does not also make
+ * thin snow erodible or hand-gradable like a registered material would. The one place that needs
+ * its own case is a rising surface, where the snow's own cell has to become a genuinely full block
+ * first -- unlike every other natural ground top, thin snow is not already a full cube, so a new
+ * cell added above it would otherwise float. Roads and farms have no layered form at all, so they
+ * are untouched for a different reason. Gated by {@code worldgenSmoothing}.
  */
 public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
     public SmoothSurfaceFeature(Codec<NoneFeatureConfiguration> codec) {
@@ -85,16 +62,13 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         int x0 = context.origin().getX();
         int z0 = context.origin().getZ();
 
-        // Resolved once per chunk, not per column: the chunk's own structure starts/references, kept to
-        // chunks already in cache (hasChunk) so this can never force-load a chunk outside the region this
-        // generation step was given — doing that crashes worldgen instead of merely slowing it down. If a
-        // referenced structure's start chunk is out of cache, fail closed: skip the whole chunk rather than
-        // silently smoothing a column that structure might actually cover.
-        Optional<List<StructureBounds>> structures = structureBoundsNear(level, x0 >> 4, z0 >> 4);
-        if (structures.isEmpty()) {
-            return false;
-        }
-        List<StructureBounds> structureBounds = structures.get();
+        // EXPERIMENTAL (MINECRAFT-500): no structure-footprint guard at all on this branch. John
+        // never actually asked for structure protection -- it was inherited unquestioned from
+        // Dynamic Terrain's own pre-extraction code. This branch exists purely to measure the real
+        // tradeoffs (exposed-slope improvement vs. structure/door/path/foundation side effects)
+        // with the guard removed, against the per-piece-guard candidate on
+        // minecraft-504-piece-structure-protection, before deciding which (if either) ships.
+        // Material/cover/support checks (smoothColumn's own guards) are untouched.
 
         // Natural surface heights for the chunk plus a one-block border, all read from blocks. (Asking the
         // generator for heights costs milliseconds per column and made chunk generation several times slower.)
@@ -121,73 +95,10 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         around[a][b] = natural[dx + a][dz + b];
                     }
                 }
-                changed |= smoothColumn(level, x0 + dx, z0 + dz, around, structureBounds);
+                changed |= smoothColumn(level, x0 + dx, z0 + dz, around);
             }
         }
         return changed;
-    }
-
-    /**
-     * Bounding boxes of every structure touching this chunk: ones that start here (always resolvable,
-     * no lookup needed), plus ones that merely reference this chunk, resolved from the chunk that
-     * actually started them when that chunk is in cache ({@code hasChunk} is checked before every
-     * {@code getChunk}, so this never forces a chunk load outside the generation step's region — doing
-     * that crashes worldgen rather than just being slow). The fail-closed policy for an unresolved
-     * reference lives in {@link StructureProtection}, which this only feeds.
-     */
-    private static Optional<List<StructureBounds>> structureBoundsNear(WorldGenLevel level, int chunkX, int chunkZ) {
-        if (!level.hasChunk(chunkX, chunkZ)) {
-            return Optional.of(List.of());
-        }
-        ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
-        List<StructureBounds> localStarts = new ArrayList<>();
-        for (StructureStart start : chunk.getAllStarts().values()) {
-            localStarts.addAll(boundsOf(start));
-        }
-        List<StructureProtection.ReferenceLookup> referencedStarts = new ArrayList<>();
-        for (Map.Entry<Structure, LongSet> entry : chunk.getAllReferences().entrySet()) {
-            for (long packed : entry.getValue()) {
-                int ox = ChunkPos.getX(packed);
-                int oz = ChunkPos.getZ(packed);
-                if (!level.hasChunk(ox, oz)) {
-                    referencedStarts.add(StructureProtection.ReferenceLookup.unresolved());
-                } else {
-                    StructureStart start = level.getChunk(ox, oz).getStartForStructure(entry.getKey());
-                    referencedStarts.add(StructureProtection.ReferenceLookup.resolved(boundsOf(start)));
-                }
-            }
-        }
-        return StructureProtection.resolve(localStarts, referencedStarts);
-    }
-
-    /**
-     * MINECRAFT-500 live investigation: per PIECE, not one box for the whole structure.
-     * {@code StructureStart.getBoundingBox()} is {@code structure.adjustBoundingBox(...)} applied
-     * to the UNION of every piece's own box, which for a structure with winding, scattered pieces
-     * (a mineshaft's tunnels, most of all) can be far larger than anything actually built --
-     * confirmed live against a real generated mineshaft, whose single whole-structure box alone
-     * protected 70%+ of a sampled area with no mineshaft block anywhere near its surface.
-     *
-     * <p>{@code adjustBoundingBox} itself must still run, per piece, not be dropped: it inflates
-     * by 12 blocks on every side whenever {@code structure.terrainAdaptation() != NONE} (confirmed
-     * live by decompiling {@code Structure.adjustBoundingBox}) -- the margin a terrain-adapting
-     * structure (a village's or outpost's own "beard"/"bury" blending, declared in its own
-     * datapack JSON) needs kept around each of its own pieces so an open plaza or a building's
-     * terrain-adaptation beard stays protected even with nothing placed directly above it, exactly
-     * as the class doc above already promised. A mineshaft configures no terrain adaptation at
-     * all, so this is a true no-op for the exact case that motivated the per-piece switch; it only
-     * matters for structures that actually declared the margin.
-     */
-    private static List<StructureBounds> boundsOf(StructureStart start) {
-        if (start == null || !start.isValid()) {
-            return List.of();
-        }
-        List<StructureBounds> bounds = new ArrayList<>();
-        for (StructurePiece piece : start.getPieces()) {
-            BoundingBox box = start.getStructure().adjustBoundingBox(piece.getBoundingBox());
-            bounds.add(new StructureBounds(box.minX(), box.minZ(), box.maxX(), box.maxZ()));
-        }
-        return bounds;
     }
 
     /**
@@ -222,10 +133,7 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         return pos.getY() + 1;
     }
 
-    private static boolean smoothColumn(LevelAccessor level, int x, int z, int[][] around, List<StructureBounds> structures) {
-        if (StructureBounds.containsAny(structures, x, z)) {
-            return false; // inside a structure's footprint
-        }
+    private static boolean smoothColumn(LevelAccessor level, int x, int z, int[][] around) {
         int surface = around[1][1]; // top of the highest solid block
         BlockPos top = new BlockPos(x, surface - 1, z);
         BlockState topState = level.getBlockState(top);
