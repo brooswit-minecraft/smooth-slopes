@@ -162,14 +162,21 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
 
     /**
      * MINECRAFT-500 live investigation: per PIECE, not one box for the whole structure.
-     * {@code StructureStart.getBoundingBox()} is the union of every piece's own box, which for a
-     * structure with winding, scattered pieces (a mineshaft's tunnels, most of all) can be far
-     * larger than anything actually built -- confirmed live against a real generated mineshaft,
-     * whose single whole-structure box alone protected 70%+ of a sampled area with no mineshaft
-     * block anywhere near its surface. Each piece's own box ({@code StructurePiece.getBoundingBox()})
-     * is exactly what vanilla's own placement code already intersects against per piece (see
-     * {@code StructureStart.placeInChunk}), so this is the same granularity vanilla itself uses,
-     * not a new approximation.
+     * {@code StructureStart.getBoundingBox()} is {@code structure.adjustBoundingBox(...)} applied
+     * to the UNION of every piece's own box, which for a structure with winding, scattered pieces
+     * (a mineshaft's tunnels, most of all) can be far larger than anything actually built --
+     * confirmed live against a real generated mineshaft, whose single whole-structure box alone
+     * protected 70%+ of a sampled area with no mineshaft block anywhere near its surface.
+     *
+     * <p>{@code adjustBoundingBox} itself must still run, per piece, not be dropped: it inflates
+     * by 12 blocks on every side whenever {@code structure.terrainAdaptation() != NONE} (confirmed
+     * live by decompiling {@code Structure.adjustBoundingBox}) -- the margin a terrain-adapting
+     * structure (a village's or outpost's own "beard"/"bury" blending, declared in its own
+     * datapack JSON) needs kept around each of its own pieces so an open plaza or a building's
+     * terrain-adaptation beard stays protected even with nothing placed directly above it, exactly
+     * as the class doc above already promised. A mineshaft configures no terrain adaptation at
+     * all, so this is a true no-op for the exact case that motivated the per-piece switch; it only
+     * matters for structures that actually declared the margin.
      */
     private static List<StructureBounds> boundsOf(StructureStart start) {
         if (start == null || !start.isValid()) {
@@ -177,7 +184,7 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         }
         List<StructureBounds> bounds = new ArrayList<>();
         for (StructurePiece piece : start.getPieces()) {
-            BoundingBox box = piece.getBoundingBox();
+            BoundingBox box = start.getStructure().adjustBoundingBox(piece.getBoundingBox());
             bounds.add(new StructureBounds(box.minX(), box.minZ(), box.maxX(), box.maxZ()));
         }
         return bounds;
