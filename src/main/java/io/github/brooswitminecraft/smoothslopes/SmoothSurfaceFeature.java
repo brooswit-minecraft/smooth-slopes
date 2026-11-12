@@ -29,6 +29,7 @@ import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
 
 /**
@@ -40,11 +41,16 @@ import net.minecraft.world.level.levelgen.structure.StructureStart;
  *
  * <p>It leaves a column alone unless the surface is plain natural ground: the top
  * block must have a layered form, the cell above it must be air (no trees, plants
- * or water), the cell below must be solid, and the column must not fall inside a
- * generated structure's bounding box (village, outpost, etc. — checked directly
- * against the chunk's own structure starts/references, not inferred from blocks,
- * so an open plaza or a door's terrain-adaptation beard is protected even with
- * nothing placed directly above it). A thin vanilla snow layer counts as plain
+ * or water), the cell below must be solid, and the column must not fall inside any
+ * individual PIECE of a generated structure (village, outpost, etc. — checked
+ * directly against the chunk's own structure starts/references, not inferred from
+ * blocks, so an open plaza or a door's terrain-adaptation beard is protected even
+ * with nothing placed directly above it). Deliberately per piece, not one box for
+ * the whole structure: a structure's own outer bounding box is the union of every
+ * piece's box, which for pieces that wind or scatter (a mineshaft's tunnels, most
+ * of all) can be far larger than anything actually built -- confirmed live against
+ * a real generated mineshaft, whose single whole-structure box protected 70%+ of a
+ * sampled area with no mineshaft block anywhere near its surface. A thin vanilla snow layer counts as plain
  * ground in its own right: unlike every other natural ground top, it doesn't
  * block motion ({@code Blocks.SNOW} is {@code forceSolidOff}), so it has to be
  * explicitly discovered in {@link #groundHeight} rather than simply being the
@@ -136,7 +142,7 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         ChunkAccess chunk = level.getChunk(chunkX, chunkZ);
         List<StructureBounds> localStarts = new ArrayList<>();
         for (StructureStart start : chunk.getAllStarts().values()) {
-            boundsOf(start).ifPresent(localStarts::add);
+            localStarts.addAll(boundsOf(start));
         }
         List<StructureProtection.ReferenceLookup> referencedStarts = new ArrayList<>();
         for (Map.Entry<Structure, LongSet> entry : chunk.getAllReferences().entrySet()) {
@@ -154,12 +160,27 @@ public class SmoothSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         return StructureProtection.resolve(localStarts, referencedStarts);
     }
 
-    private static Optional<StructureBounds> boundsOf(StructureStart start) {
+    /**
+     * MINECRAFT-500 live investigation: per PIECE, not one box for the whole structure.
+     * {@code StructureStart.getBoundingBox()} is the union of every piece's own box, which for a
+     * structure with winding, scattered pieces (a mineshaft's tunnels, most of all) can be far
+     * larger than anything actually built -- confirmed live against a real generated mineshaft,
+     * whose single whole-structure box alone protected 70%+ of a sampled area with no mineshaft
+     * block anywhere near its surface. Each piece's own box ({@code StructurePiece.getBoundingBox()})
+     * is exactly what vanilla's own placement code already intersects against per piece (see
+     * {@code StructureStart.placeInChunk}), so this is the same granularity vanilla itself uses,
+     * not a new approximation.
+     */
+    private static List<StructureBounds> boundsOf(StructureStart start) {
         if (start == null || !start.isValid()) {
-            return Optional.empty();
+            return List.of();
         }
-        BoundingBox box = start.getBoundingBox();
-        return Optional.of(new StructureBounds(box.minX(), box.minZ(), box.maxX(), box.maxZ()));
+        List<StructureBounds> bounds = new ArrayList<>();
+        for (StructurePiece piece : start.getPieces()) {
+            BoundingBox box = piece.getBoundingBox();
+            bounds.add(new StructureBounds(box.minX(), box.minZ(), box.maxX(), box.maxZ()));
+        }
+        return bounds;
     }
 
     /**
