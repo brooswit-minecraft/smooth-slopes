@@ -3,9 +3,14 @@ package io.github.brooswitminecraft.smoothslopes;
 import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopes.LayeredSlopesMod;
 
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.BuiltinStructures;
+import net.minecraft.world.level.levelgen.structure.Structure;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -45,6 +50,35 @@ public final class CoinstalledGameTests {
                 "smoothslopes:smooth_surface must be a bound, registered Feature");
         helper.assertTrue(SmoothSlopesMod.SMOOTH_SURFACE.get() instanceof SmoothSurfaceFeature,
                 "the registered smooth_surface feature must be this mod's own SmoothSurfaceFeature");
+        helper.succeed();
+    }
+
+    /**
+     * MINECRAFT-500 nonblocking cleanup (53502): on this branch, {@code SmoothSurfaceFeature} no
+     * longer calls {@code Structure.adjustBoundingBox} at all -- the structure-footprint guard it
+     * backed has been removed entirely, per John's direction, not merely narrowed to per-piece
+     * boxes. This test is inherited from the per-piece-guard candidate (PR #2,
+     * minecraft-504-piece-structure-protection) where it verified that guard's real behavior
+     * against the REAL registered vanilla structures. It is kept here only for parity with that
+     * comparison candidate and to pin down actual vanilla registry behavior as a general
+     * regression check; it no longer exercises anything this branch's own feature code does.
+     */
+    @GameTest(template = "flat_platform")
+    public static void structureAdjustBoundingBoxVanillaBehaviorStaysAsExpected(GameTestHelper helper) {
+        Registry<Structure> structures = helper.getLevel().registryAccess().registryOrThrow(Registries.STRUCTURE);
+        Structure outpost = structures.getOrThrow(BuiltinStructures.PILLAGER_OUTPOST);
+        Structure mineshaft = structures.getOrThrow(BuiltinStructures.MINESHAFT);
+
+        BoundingBox piece = new BoundingBox(0, 0, 0, 3, 3, 3);
+        BoundingBox outpostAdjusted = outpost.adjustBoundingBox(piece);
+        BoundingBox mineshaftAdjusted = mineshaft.adjustBoundingBox(piece);
+
+        helper.assertTrue(!outpostAdjusted.equals(piece),
+                "a pillager outpost's real terrain adaptation must inflate a piece's own box, not leave it unchanged");
+        helper.assertTrue(outpostAdjusted.minX() == piece.minX() - 12 && outpostAdjusted.maxX() == piece.maxX() + 12,
+                "the real inflation must be exactly 12 blocks on each side, per Structure.adjustBoundingBox");
+        helper.assertTrue(mineshaftAdjusted.equals(piece),
+                "a mineshaft declares no terrain adaptation, so adjustBoundingBox must be a true no-op");
         helper.succeed();
     }
 }

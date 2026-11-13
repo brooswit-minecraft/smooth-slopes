@@ -25,7 +25,7 @@ class RuntimeEvidenceError(ValueError):
     """The GameTest log cannot prove a complete, non-trivial run."""
 
 
-EXPECTED_REQUIRED_TEST_COUNT = 2  # smoothMaterialsResolves.../smoothSurfaceFeatureIsRegistered...
+EXPECTED_REQUIRED_TEST_COUNT = 3  # smoothMaterialsResolves.../smoothSurfaceFeatureIsRegistered.../realStructureTerrainAdaptation... (MINECRAFT-516)
 
 
 def verify_runtime_log(log_text):
